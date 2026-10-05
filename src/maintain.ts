@@ -5,21 +5,26 @@ import {
   type Edit,
   projectedMessages,
 } from "./context.ts";
-import { DEFAULT_PRUNE, pruneToolOutputs } from "./prune.ts";
-import { AUTO_SHAKE, shake } from "./shake.ts";
+import type { ContextKitConfig } from "./config.ts";
+import { pruneToolOutputs } from "./prune.ts";
+import { type ShakeOptions, shake } from "./shake.ts";
 import { supersededReads } from "./stale.ts";
 
-/** Stale results are edited only near the end of the context, where the prompt cache is not yet reused. */
-const STALE_SUFFIX_TOKENS = 8_000;
-/** Pruning and shaking must get the context this far below the threshold, or compaction runs instead. */
-export const PROGRESS_RATIO = 0.8;
+export type MaintenanceOptions = Pick<
+  ContextKitConfig,
+  "supersedeReads" | "staleSuffixTokens" | "prune" | "progressRatio"
+> & {
+  /** Undefined leaves the context unshaken. */
+  shake: ShakeOptions | undefined;
+};
 
 export interface MaintenanceInput {
   entries: readonly ProjectedSessionEntry[];
   edited: ReadonlySet<string>;
+  options: MaintenanceOptions;
   /** Pi's current context estimate. */
   tokens: number;
-  /** Pi compacts above this many tokens. */
+  /** Compaction runs above this many tokens. */
   threshold: number;
 }
 
@@ -35,12 +40,11 @@ export interface MaintenancePlan {
  * compaction threshold, or when pruning and shaking make compaction unnecessary.
  */
 export function planMaintenance(input: MaintenanceInput): MaintenancePlan {
+  const { options } = input;
   const unchanged = { edits: [], tokens: input.tokens };
-  const stale = supersededReads(
-    input.entries,
-    input.edited,
-    STALE_SUFFIX_TOKENS,
-  );
+  const stale = options.supersedeReads
+    ? supersededReads(input.entries, input.edited, options.staleSuffixTokens)
+    : [];
   const afterStale = applyEdits(input.entries, stale);
   const staleTokens = contextTokens(projectedMessages(afterStale));
 
@@ -54,13 +58,15 @@ export function planMaintenance(input: MaintenanceInput): MaintenancePlan {
     ...input.edited,
     ...stale.map((edit) => edit.targetId),
   ]);
-  const pruned = pruneToolOutputs(afterStale, edited, DEFAULT_PRUNE);
+  const pruned = options.prune.enabled
+    ? pruneToolOutputs(afterStale, edited, options.prune)
+    : [];
   const afterPrune = applyEdits(afterStale, pruned);
-  const shaken = shake(afterPrune, AUTO_SHAKE);
+  const shaken = options.shake ? shake(afterPrune, options.shake) : [];
   const reducedTokens = contextTokens(
     projectedMessages(applyEdits(afterPrune, shaken)),
   );
-  if (reducedTokens <= input.threshold * PROGRESS_RATIO) {
+  if (reducedTokens <= input.threshold * options.progressRatio) {
     return {
       edits: latestPerTarget([...stale, ...pruned, ...shaken]),
       tokens: reducedTokens,

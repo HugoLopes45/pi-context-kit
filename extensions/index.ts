@@ -8,11 +8,24 @@ import {
   convertToLlm,
   type ExtensionAPI,
   type ExtensionContext,
+  findCutPoint,
   getLatestCompactionEntry,
   type SessionEntry,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { BackgroundHandoff, firstEntryAfter } from "../src/background.ts";
+import {
+  BackgroundHandoff,
+  type BackgroundNote,
+  firstEntryAfter,
+  type Note,
+} from "../src/background.ts";
+import {
+  type ContextKitConfig,
+  type Method,
+  ownThreshold,
+  readConfig,
+  speculationLead,
+} from "../src/config.ts";
 import {
   applyEdits,
   contextTokens,
@@ -21,25 +34,53 @@ import {
   toDrafts,
 } from "../src/context.ts";
 import { handoffSummary } from "../src/handoff.ts";
-import { PROGRESS_RATIO, planMaintenance } from "../src/maintain.ts";
+import { planMaintenance } from "../src/maintain.ts";
 import { requestNote } from "../src/note.ts";
 import { readEntry, searchEntries } from "../src/recall.ts";
 
-/** Start the background handoff this many tokens before Pi's compaction threshold. */
-const BACKGROUND_TOKENS = 32_768;
-
+// One closure per session: Pi and pi-subagents load the extension once per session in the same process.
 export default function contextKit(pi: ExtensionAPI): void {
   const background = new BackgroundHandoff();
+  let reported = "";
+  /** The compaction epoch in which a threshold note failed, so it is not retried every turn. */
+  let failedEpoch: string | null | undefined;
+
+  /** Reads `contextKit` from Pi's settings on each use, so `/reload` and project settings apply. */
+  const settings = (ctx: ExtensionContext): ContextKitConfig => {
+    const { config, problems } = readConfig(
+      Reflect.get(pi.getSettings(), "contextKit"),
+    );
+    const message = problems.join("; ");
+    if (message && message !== reported)
+      ctx.ui.notify(
+        `pi-context-kit: invalid settings, defaults used (${message}).`,
+        "warning",
+      );
+    reported = message;
+    return config;
+  };
+
+  const compactionSettings = (model: Model<Api>) =>
+    SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(model);
 
   /** Pi compacts above this many tokens, using the same settings lookup as Pi. */
-  const threshold = (model: Model<Api> | undefined): number => {
+  const piThreshold = (model: Model<Api> | undefined): number => {
     if (!model || model.contextWindow <= 0) return Number.POSITIVE_INFINITY;
-    const settings = SettingsManager.inMemory(
-      pi.getSettings(),
-    ).getCompactionSettings(model);
-    return settings.enabled
-      ? model.contextWindow - settings.reserveTokens
+    const compaction = compactionSettings(model);
+    return compaction.enabled
+      ? model.contextWindow - compaction.reserveTokens
       : Number.POSITIVE_INFINITY;
+  };
+
+  /** Pi still compacts at its own threshold, so a configured threshold can only come earlier. */
+  const threshold = (
+    model: Model<Api> | undefined,
+    config: ContextKitConfig,
+  ): number => {
+    const piLimit = piThreshold(model);
+    return model && piLimit < Number.POSITIVE_INFINITY
+      ? Math.min(piLimit, ownThreshold(config, model.contextWindow))
+      : piLimit;
   };
 
   const epoch = (branch: SessionEntry[]) =>
@@ -53,100 +94,170 @@ export default function contextKit(pi: ExtensionAPI): void {
     );
   };
 
-  pi.on("turn_end", (event, ctx) => {
+  /**
+   * Builds a handoff compaction. A background note keeps everything after its leaf. A new note
+   * covers the whole context and keeps from `keptEntryId`, so the latest work stays visible.
+   */
+  const handoff = async (input: {
+    ctx: ExtensionContext;
+    model: Model<Api>;
+    config: ContextKitConfig;
+    branch: SessionEntry[];
+    ready: BackgroundNote | undefined;
+    keptEntryId: string;
+    limit: number;
+    /** Undefined when only the background note may be used. */
+    messages: Message[] | undefined;
+    focus?: string;
+    signal: AbortSignal;
+  }) => {
+    const { ctx, branch, ready } = input;
+    const compaction = (note: Note, firstKeptEntryId: string) => ({
+      ...handoffSummary(note.note, branch),
+      firstKeptEntryId,
+      usage: note.usage,
+    });
+    if (ready) {
+      const result = compaction(
+        ready,
+        firstEntryAfter(branch, ready.leafId) ?? input.keptEntryId,
+      );
+      const kept = keptTokens(ctx, result.firstKeptEntryId);
+      if (fits(result.summary, kept, input.limit, input.config.progressRatio))
+        return result;
+    }
+    if (!input.messages) return undefined;
+    const note = await requestNote({
+      registry: ctx.modelRegistry,
+      model: input.model,
+      sessionId: ctx.sessionManager.getSessionId(),
+      messages: input.messages,
+      focus: input.focus,
+      signal: input.signal,
+    });
+    return note && compaction(note, input.keptEntryId);
+  };
+
+  pi.on("turn_end", async (event, ctx) => {
+    const config = settings(ctx);
+    if (!config.enabled) return undefined;
     const model = ctx.model;
-    const limit = threshold(model);
+    const limit = threshold(model, config);
+    const methods = config.methodOrder;
     const entries = event.context.contextEntries;
     const branch = ctx.sessionManager.getBranch();
+    const edited = editedEntryIds(branch);
     const tokens =
       ctx.getContextUsage()?.tokens ??
       contextTokens(projectedMessages(entries));
-    const plan = planMaintenance({
-      entries,
-      edited: editedEntryIds(branch),
-      tokens,
-      threshold: limit,
-    });
+    const plan = (shake: boolean) =>
+      planMaintenance({
+        entries,
+        edited,
+        options: { ...config, shake: shake ? config.shake : undefined },
+        tokens,
+        threshold: limit,
+      });
+    const shakeFirst = before(methods, "shake", "handoff");
+    let result = plan(shakeFirst);
+    const drafts = () => toDrafts(result.edits);
 
     const leafId = ctx.sessionManager.getLeafId();
-    if (
-      model &&
-      leafId &&
-      plan.tokens > limit - BACKGROUND_TOKENS &&
-      plan.tokens <= limit
-    ) {
-      const messages = convertToLlm(
-        projectedMessages(applyEdits(entries, plan.edits)),
-      );
-      background.start(
-        epoch(branch),
-        leafId,
-        (signal) =>
-          requestNote({
-            registry: ctx.modelRegistry,
+    const current = epoch(branch);
+    // Pi compacts at its own threshold, through session_before_compact.
+    const own = limit < piThreshold(model) && result.tokens > limit;
+    if (model && leafId && before(methods, "handoff", "soft")) {
+      const messages = () =>
+        convertToLlm(projectedMessages(applyEdits(entries, result.edits)));
+      if (
+        config.asyncEnabled &&
+        result.tokens > limit - speculationLead(limit) &&
+        result.tokens <= limit
+      ) {
+        const context = messages();
+        background.start(
+          current,
+          leafId,
+          (signal) =>
+            requestNote({
+              registry: ctx.modelRegistry,
+              model,
+              sessionId: ctx.sessionManager.getSessionId(),
+              messages: context,
+              signal,
+            }),
+          (error) => warn(ctx, error, "A new note is written at compaction."),
+        );
+      }
+      const keptEntryId =
+        own && recentStart(branch, compactionSettings(model).keepRecentTokens);
+      if (own && keptEntryId && failedEpoch !== current) {
+        // The note being written lands at a later turn; Pi's threshold still bounds the wait.
+        if (background.writing(current)) return { entries: drafts() };
+        const signal = ctx.signal ?? new AbortController().signal;
+        try {
+          const compaction = await handoff({
+            ctx,
             model,
-            sessionId: ctx.sessionManager.getSessionId(),
-            messages,
+            config,
+            branch,
+            ready: await background.take(current, branch, signal),
+            keptEntryId,
+            limit,
+            messages: messages(),
             signal,
-          }),
-        (error) => warn(ctx, error, "A new note is written at compaction."),
-      );
+          });
+          if (compaction) {
+            background.cancel();
+            return {
+              entries: [...drafts(), { type: "compaction", ...compaction }],
+            };
+          }
+          failedEpoch = current;
+        } catch (error) {
+          failedEpoch = current;
+          if (!signal.aborted)
+            warn(ctx, error, "Pi compacts at its own threshold instead.");
+        }
+      }
     }
-    return plan.edits.length > 0
-      ? { entries: toDrafts(plan.edits) }
-      : undefined;
+    if (own && !shakeFirst && methods.includes("shake")) result = plan(true);
+    return result.edits.length > 0 ? { entries: drafts() } : undefined;
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
     const model = ctx.model;
-    if (!model) return undefined;
+    const config = settings(ctx);
+    if (
+      !model ||
+      !config.enabled ||
+      !before(config.methodOrder, "handoff", "soft")
+    )
+      return undefined;
     const { preparation, branchEntries, signal } = event;
-    const limit = Math.min(threshold(model), model.contextWindow);
-
-    // A focused /compact needs a note written for that focus.
-    const ready = event.customInstructions
-      ? undefined
-      : await background.take(epoch(branchEntries), branchEntries, signal);
-    // The note covers everything up to its leaf, so the kept part must start right after it.
-    const firstKeptEntryId =
-      ready && firstEntryAfter(branchEntries, ready.leafId);
-    if (ready && firstKeptEntryId) {
-      const { summary, details } = handoffSummary(ready.note, branchEntries);
-      if (fits(summary, keptTokens(ctx, firstKeptEntryId), limit)) {
-        return {
-          compaction: {
-            summary,
-            firstKeptEntryId,
-            tokensBefore: preparation.tokensBefore,
-            details,
-            usage: ready.usage,
-          },
-        };
-      }
-    }
-    // The live context no longer fits the model after an overflow.
-    if (event.reason === "overflow") return undefined;
-
+    const limit = Math.min(threshold(model, config), model.contextWindow);
     try {
-      const note = await requestNote({
-        registry: ctx.modelRegistry,
+      const compaction = await handoff({
+        ctx,
         model,
-        sessionId: ctx.sessionManager.getSessionId(),
-        messages: liveMessages(ctx),
+        config,
+        branch: branchEntries,
+        // A focused /compact needs a note written for that focus.
+        ready: event.customInstructions
+          ? undefined
+          : await background.take(epoch(branchEntries), branchEntries, signal),
+        keptEntryId: preparation.firstKeptEntryId,
+        limit,
+        // The live context no longer fits the model after an overflow.
+        messages: event.reason === "overflow" ? undefined : liveMessages(ctx),
         focus: event.customInstructions,
         signal,
       });
-      if (!note) return undefined;
-      const { summary, details } = handoffSummary(note.note, branchEntries);
-      return {
-        compaction: {
-          summary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details,
-          usage: note.usage,
-        },
-      };
+      return (
+        compaction && {
+          compaction: { ...compaction, tokensBefore: preparation.tokensBefore },
+        }
+      );
     } catch (error) {
       if (!signal.aborted) warn(ctx, error, "Pi's summary is used instead.");
       return undefined;
@@ -216,6 +327,29 @@ function keptTokens(ctx: ExtensionContext, firstKeptEntryId: string): number {
   ]);
 }
 
-function fits(summary: string, kept: number, limit: number): boolean {
-  return Math.ceil(summary.length / 4) + kept <= limit * PROGRESS_RATIO;
+function fits(
+  summary: string,
+  kept: number,
+  limit: number,
+  ratio: number,
+): boolean {
+  return Math.ceil(summary.length / 4) + kept <= limit * ratio;
+}
+
+/** Whether `a` comes first in `methods`, or `b` is absent. */
+function before(methods: readonly Method[], a: Method, b: Method): boolean {
+  const index = methods.indexOf(a);
+  const other = methods.indexOf(b);
+  return index >= 0 && (other < 0 || index < other);
+}
+
+/** Where Pi would start the kept part: about `keepRecentTokens` back, after the latest compaction. */
+function recentStart(
+  branch: SessionEntry[],
+  keepRecentTokens: number,
+): string | undefined {
+  const latest = getLatestCompactionEntry(branch);
+  const start = latest ? branch.indexOf(latest) + 1 : 0;
+  const cut = findCutPoint(branch, start, branch.length, keepRecentTokens);
+  return branch[cut.firstKeptEntryIndex]?.id;
 }

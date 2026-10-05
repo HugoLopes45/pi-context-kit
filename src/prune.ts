@@ -16,12 +16,6 @@ export interface PruneOptions {
   minTokens: number;
 }
 
-export const DEFAULT_PRUNE: PruneOptions = {
-  protectTokens: 40_000,
-  minSavings: 20_000,
-  minTokens: 50,
-};
-
 /** Replaces old tool outputs with a short notice that points to `recall`. */
 export function pruneToolOutputs(
   entries: readonly ProjectedSessionEntry[],

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import { planMaintenance } from "../src/maintain.ts";
 import { filler, Transcript } from "./fixtures.ts";
 
@@ -15,6 +16,7 @@ describe("planMaintenance", () => {
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
+      options: DEFAULT_CONFIG,
       tokens: 4_100,
       threshold: 10_000,
     });
@@ -27,6 +29,7 @@ describe("planMaintenance", () => {
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
+      options: DEFAULT_CONFIG,
       tokens: 1_000,
       threshold: 1_500,
     });
@@ -40,6 +43,7 @@ describe("planMaintenance", () => {
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
+      options: DEFAULT_CONFIG,
       tokens: 71_100,
       threshold: 70_000,
     });
@@ -54,9 +58,61 @@ describe("planMaintenance", () => {
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
+      options: DEFAULT_CONFIG,
       tokens: 81_100,
       threshold: 70_000,
     });
     expect(plan).toEqual({ edits: [], tokens: 81_100 });
+  });
+
+  it("keeps older reads when supersedeReads is off", () => {
+    const { t } = staleSession();
+    const plan = planMaintenance({
+      entries: t.entries(),
+      edited: new Set(),
+      options: { ...DEFAULT_CONFIG, supersedeReads: false },
+      tokens: 4_100,
+      threshold: 10_000,
+    });
+    expect(plan).toEqual({ edits: [], tokens: 4_100 });
+  });
+
+  it("does not prune when pruning is off", () => {
+    const t = new Transcript();
+    t.tool("bash", { command: "a" }, filler(30_000));
+    t.tool("bash", { command: "b" }, filler(41_000));
+    const plan = planMaintenance({
+      entries: t.entries(),
+      edited: new Set(),
+      options: {
+        ...DEFAULT_CONFIG,
+        prune: { ...DEFAULT_CONFIG.prune, enabled: false },
+      },
+      tokens: 71_100,
+      threshold: 70_000,
+    });
+    expect(plan).toEqual({ edits: [], tokens: 71_100 });
+  });
+
+  it("shakes only when shake options are given", () => {
+    const t = new Transcript();
+    t.user(`<log>\n${filler(30_000)}\n</log>`);
+    t.assistant("ok");
+    t.user(filler(41_000));
+    const input = {
+      entries: t.entries(),
+      edited: new Set<string>(),
+      tokens: 71_100,
+      threshold: 70_000,
+    };
+    expect(
+      planMaintenance({ ...input, options: DEFAULT_CONFIG }).edits,
+    ).toHaveLength(1);
+    expect(
+      planMaintenance({
+        ...input,
+        options: { ...DEFAULT_CONFIG, shake: undefined },
+      }),
+    ).toEqual({ edits: [], tokens: 71_100 });
   });
 });

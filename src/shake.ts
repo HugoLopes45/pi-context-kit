@@ -20,12 +20,6 @@ export interface ShakeOptions {
   blockMinTokens: number;
 }
 
-export const AUTO_SHAKE: ShakeOptions = {
-  protectTokens: 16_000,
-  minSavings: 4_000,
-  blockMinTokens: 400,
-};
-
 /** A fenced code block, or an XML-like element with a matching closing tag. */
 const BLOCK =
   /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1|<([A-Za-z][\w.:-]*)(?:\s[^<>]*)?>[\s\S]*?<\/\2>/g;
