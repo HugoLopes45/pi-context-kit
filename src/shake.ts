@@ -44,7 +44,7 @@ export function shake(
       if (message.role !== "system") seen += messageTokens(message);
     }
     const message = editableMessage(entry);
-    if (isProtected || !message) continue;
+    if (isProtected || !message || message.role === "user") continue;
 
     const content = shakeContent(message, entry.sourceEntry.id, options);
     if (content === undefined) continue;

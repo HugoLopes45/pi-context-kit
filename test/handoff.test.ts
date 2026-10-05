@@ -28,6 +28,14 @@ describe("handoffNote", () => {
     expect(handoffNote(response)).toBe("## Goal\nShip it");
   });
 
+  it("rejects length-truncated notes", () => {
+    expect(() =>
+      handoffNote(
+        fauxAssistantMessage("partial note", { stopReason: "length" }),
+      ),
+    ).toThrow(/truncated|length/i);
+  });
+
   it("returns nothing for an empty reply and throws for a failed one", () => {
     expect(handoffNote(fauxAssistantMessage(" "))).toBeUndefined();
     expect(() =>

@@ -77,6 +77,15 @@ npm run check
 
 The tests run offline with Pi's faux provider.
 
+## Contributing and releases
+
+1. Open a pull request. CI runs `npm run check` on Node 22 and 24.
+2. Add user-visible changes under `## Unreleased` in `CHANGELOG.md`.
+3. To release, run `npm run release -- <patch|minor|major|x.y.z>` from an up-to-date, clean `main`. The script names the `Unreleased` section after the version, updates `package.json`, runs the checks, and opens a release pull request.
+4. Merge the release pull request. The `Release` workflow publishes the package to npm with provenance and creates the GitHub release from the CHANGELOG section.
+
+The workflow publishes through npm trusted publishing, so the repository stores no npm token.
+
 ## License
 
 MIT

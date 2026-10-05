@@ -3,7 +3,7 @@ import { readEntry, searchEntries } from "../src/recall.ts";
 import { Transcript } from "./fixtures.ts";
 
 describe("searchEntries", () => {
-  it("finds matching entries case-insensitively, newest first", () => {
+  it("finds matching entries case-insensitively, newest first", async () => {
     const t = new Transcript();
     const user = t.user("Fix the Login bug");
     t.assistant("Looking at other things");
@@ -12,7 +12,7 @@ describe("searchEntries", () => {
       { command: "npm test" },
       "FAIL login.test.ts\nexpected 200",
     );
-    expect(searchEntries(t.branch(), { query: "login" })).toBe(
+    expect(await searchEntries(t.branch(), { query: "login" })).toBe(
       [
         `${result} toolResult bash: [bash result] FAIL login.test.ts expected 200`,
         `${user} user: Fix the Login bug`,
@@ -20,33 +20,47 @@ describe("searchEntries", () => {
     );
   });
 
-  it("supports regex, paging, and reports no match", () => {
+  it("supports regex, paging, and reports no match", async () => {
     const t = new Transcript();
     const ids = [t.user("error 1"), t.user("error 2"), t.user("error 3")];
     expect(
-      searchEntries(t.branch(), {
+      await searchEntries(t.branch(), {
         query: "error \\d",
         regex: true,
         offset: 1,
         limit: 1,
       }),
     ).toBe(`${ids[1]} user: error 2\n[3 matches. Use offset=2 for more.]`);
-    expect(searchEntries(t.branch(), { query: "absent" })).toBe(
+    expect(await searchEntries(t.branch(), { query: "absent" })).toBe(
       "No entries match.",
     );
-    expect(() =>
+    await expect(
       searchEntries(t.branch(), { query: "(", regex: true }),
-    ).toThrow(/Invalid regex/);
+    ).rejects.toThrow(/Invalid regex/);
   });
 
-  it("finds raw content that a context edit hides", () => {
+  it("bounds pathological expressions and stops on cancellation", async () => {
+    const t = new Transcript();
+    t.user(`${"a".repeat(80_000)}!`);
+    await expect(
+      searchEntries(t.branch(), { query: "(a+)+$", regex: true }),
+    ).rejects.toThrow(/deadline/i);
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      searchEntries(t.branch(), { query: "a", regex: true }, controller.signal),
+    ).rejects.toThrow(/abort/i);
+  });
+
+  it("finds raw content that a context edit hides", async () => {
     const t = new Transcript();
     const id = t.tool("read", { path: "a.ts" }, "secret value");
     t.session.appendContextEdit(id, {
       content: [{ type: "text", text: "[pruned]" }],
     });
-    expect(searchEntries(t.branch(), { query: "secret" })).toContain(id);
-    expect(searchEntries(t.branch(), { query: "pruned" })).toBe(
+    expect(await searchEntries(t.branch(), { query: "secret" })).toContain(id);
+    expect(await searchEntries(t.branch(), { query: "pruned" })).toBe(
       "No entries match.",
     );
   });

@@ -295,12 +295,16 @@ export default function contextKit(pi: ExtensionAPI): void {
         }),
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const branch = ctx.sessionManager.getBranch();
       let text: string;
       if (params.entryId) text = readEntry(branch, params.entryId, params);
       else if (params.query)
-        text = searchEntries(branch, { ...params, query: params.query });
+        text = await searchEntries(
+          branch,
+          { ...params, query: params.query },
+          signal,
+        );
       else throw new Error("Pass query or entryId.");
       return { content: [{ type: "text", text }], details: undefined };
     },

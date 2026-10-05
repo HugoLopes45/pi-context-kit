@@ -222,5 +222,7 @@ export function ownThreshold(
  * and large ones do not miss too much history.
  */
 export function speculationLead(threshold: number): number {
-  return Math.min(32_000, Math.max(8_192, Math.floor(threshold / 8)));
+  return Number.isFinite(threshold) && threshold > 0
+    ? Math.min(32_000, Math.floor(threshold / 8))
+    : 0;
 }

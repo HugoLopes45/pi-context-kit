@@ -11,6 +11,7 @@ export interface NoteRequest {
   messages: readonly Message[];
   focus?: string;
   signal: AbortSignal;
+  maxTokens?: number;
 }
 
 /** Asks the session model for a handoff note. Tools stay declared to keep the cached prefix, but tool use is disabled. */
@@ -21,6 +22,7 @@ export async function requestNote(
   const response = await request.registry
     .streamSimple(request.model, context, {
       toolChoice: "none",
+      maxTokens: request.maxTokens,
       signal: request.signal,
       sessionId: request.sessionId,
     })

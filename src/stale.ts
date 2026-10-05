@@ -51,6 +51,10 @@ export function supersededReads(
       fullSuccess: false,
       successRanges: new Set<string>(),
     };
+    const fullReadCoversFile =
+      key.range === undefined &&
+      !message.isError &&
+      !isTruncatedRead(message.content);
     const superseded = message.isError
       ? seen.anyRead
       : seen.fullSuccess ||
@@ -71,12 +75,27 @@ export function supersededReads(
 
     seen.anyRead = true;
     if (!message.isError) {
-      if (key.range === undefined) seen.fullSuccess = true;
-      else seen.successRanges.add(key.range);
+      if (fullReadCoversFile) seen.fullSuccess = true;
+      else if (key.range !== undefined) seen.successRanges.add(key.range);
     }
     newer.set(key.path, seen);
   }
   return edits.reverse();
+}
+
+function isTruncatedRead(
+  content: Extract<
+    NonNullable<ReturnType<typeof editableMessage>>,
+    { role: "toolResult" }
+  >["content"],
+): boolean {
+  return content.some(
+    (block) =>
+      block.type === "text" &&
+      /\[(?:Showing lines |\d+ more lines in file|Line \d+ is )/.test(
+        block.text,
+      ),
+  );
 }
 
 function readKey(

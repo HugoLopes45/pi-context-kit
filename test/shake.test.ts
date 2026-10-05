@@ -15,7 +15,7 @@ function fenced(tokens: number): string {
 describe("shake", () => {
   it("elides large fenced and XML blocks outside the protected window", () => {
     const t = new Transcript();
-    const user = t.user(
+    const user = t.assistant(
       `before\n${fenced(300)}\nafter <log>\n${filler(300)}\n</log> end`,
     );
     t.assistant(filler(600));
@@ -26,6 +26,22 @@ describe("shake", () => {
       `before\n[Elided block: about 303 tokens. Call recall with entryId "${user}" to read it.]\n` +
         `after [Elided block: about 304 tokens. Call recall with entryId "${user}" to read it.] end`,
     );
+  });
+
+  it("preserves user instructions and user images", () => {
+    const t = new Transcript();
+    const instruction = `Preserve this instruction.\\n${fenced(600)}`;
+    const user = t.session.appendMessage({
+      role: "user",
+      content: [
+        { type: "text", text: instruction },
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+      ],
+      timestamp: Date.now(),
+    });
+    const edits = shake(t.entries(), { ...ELIDE, protectTokens: 0 });
+    expect(edits).toEqual([]);
+    expect(t.branch().find((entry) => entry.id === user)).toBeDefined();
   });
 
   it("keeps small blocks, recent entries, and tool calls", () => {
@@ -64,8 +80,8 @@ describe("shake", () => {
 
   it("returns nothing below the minimum savings", () => {
     const t = new Transcript();
-    t.user(fenced(300));
-    t.user(filler(600));
+    t.assistant(fenced(300));
+    t.assistant(filler(600));
     expect(shake(t.entries(), { ...ELIDE, minSavings: 1_000 })).toEqual([]);
   });
 });

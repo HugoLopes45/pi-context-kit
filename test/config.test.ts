@@ -106,9 +106,11 @@ describe("ownThreshold", () => {
 });
 
 describe("speculationLead", () => {
-  it("is an eighth of the threshold, between 8,192 and 32,000 tokens", () => {
-    expect(speculationLead(32_000)).toBe(8_192);
-    expect(speculationLead(160_000)).toBe(20_000);
+  it("scales to small thresholds without exceeding them", () => {
+    expect(speculationLead(8)).toBe(1);
+    expect(speculationLead(80_000)).toBe(10_000);
     expect(speculationLead(1_000_000)).toBe(32_000);
+    expect(speculationLead(0)).toBe(0);
+    expect(speculationLead(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });

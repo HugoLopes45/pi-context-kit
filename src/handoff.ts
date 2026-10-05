@@ -52,7 +52,11 @@ export function handoffContext(
 
 /** The note in a handoff response. Throws when the request failed. */
 export function handoffNote(response: AssistantMessage): string | undefined {
-  if (response.stopReason === "error" || response.stopReason === "aborted") {
+  if (
+    response.stopReason === "error" ||
+    response.stopReason === "aborted" ||
+    response.stopReason === "length"
+  ) {
     throw new Error(
       response.errorMessage ?? `Handoff request ${response.stopReason}`,
     );

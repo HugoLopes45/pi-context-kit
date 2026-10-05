@@ -53,10 +53,10 @@ export function suffixTokens(
   const suffix = new Array<number>(entries.length).fill(0);
   let total = 0;
   for (let i = entries.length - 1; i >= 0; i--) {
-    suffix[i] = total;
     for (const message of entries[i]?.messages ?? []) {
       if (message.role !== "system") total += estimateTokens(message);
     }
+    suffix[i] = total;
   }
   return suffix;
 }

@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
@@ -18,21 +19,35 @@ const DEFAULT_RESULTS = 20;
 const MAX_CHARS = 50_000;
 const DEFAULT_CHARS = 20_000;
 const SNIPPET_CHARS = 160;
+const REGEX_DEADLINE_MS = 500;
 
 /** Searches the raw text of every entry on the branch, including compacted and edited ones. */
-export function searchEntries(
+export async function searchEntries(
   branch: readonly SessionEntry[],
   options: SearchOptions,
-): string {
-  const matcher = createMatcher(options);
-  const hits: string[] = [];
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
-    if (!entry) continue;
+  signal?: AbortSignal,
+): Promise<string> {
+  const indexed = branch.flatMap((entry) => {
     const text = entryText(entry);
-    const index = text ? matcher(text) : -1;
-    if (index >= 0)
-      hits.push(`${entry.id} ${entryLabel(entry)}: ${snippet(text, index)}`);
+    return text ? [{ entry, text }] : [];
+  });
+  const indexes = options.regex
+    ? await regexIndexes(
+        indexed.map(({ text }) => text),
+        options.query,
+        signal,
+      )
+    : indexed.map(({ text }) =>
+        text.toLowerCase().indexOf(options.query.toLowerCase()),
+      );
+  const hits: string[] = [];
+  for (let i = indexed.length - 1; i >= 0; i--) {
+    const item = indexed[i];
+    const index = indexes[i];
+    if (item && index !== undefined && index >= 0)
+      hits.push(
+        `${item.entry.id} ${entryLabel(item.entry)}: ${snippet(item.text, index)}`,
+      );
   }
   if (hits.length === 0) return "No entries match.";
   const offset = clamp(options.offset, 0, hits.length, 0);
@@ -62,20 +77,59 @@ export function readEntry(
     : page;
 }
 
-function createMatcher(options: SearchOptions): (text: string) => number {
-  if (!options.regex) {
-    const needle = options.query.toLowerCase();
-    return (text) => text.toLowerCase().indexOf(needle);
-  }
-  let pattern: RegExp;
-  try {
-    pattern = new RegExp(options.query, "i");
-  } catch (error) {
-    throw new Error(
-      `Invalid regex: ${error instanceof Error ? error.message : String(error)}`,
+function regexIndexes(
+  texts: string[],
+  query: string,
+  signal: AbortSignal | undefined,
+): Promise<number[]> {
+  if (signal?.aborted) return Promise.reject(new Error("Search aborted."));
+  const source = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    try {
+      const pattern = new RegExp(workerData.query, "i");
+      parentPort.postMessage({ indexes: workerData.texts.map((text) => text.search(pattern)) });
+    } catch (error) {
+      parentPort.postMessage({ error: error.message });
+    }
+  `;
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(source, {
+      eval: true,
+      workerData: { query, texts },
+    });
+    let settled = false;
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      void worker.terminate();
+      action();
+    };
+    const onAbort = () => finish(() => reject(new Error("Search aborted.")));
+    const timer = setTimeout(
+      () =>
+        finish(() =>
+          reject(
+            new Error(`Regex search exceeded ${REGEX_DEADLINE_MS}ms deadline.`),
+          ),
+        ),
+      REGEX_DEADLINE_MS,
     );
-  }
-  return (text) => text.search(pattern);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    worker.once("message", (result: { indexes?: number[]; error?: string }) => {
+      if (result.error)
+        finish(() => reject(new Error(`Invalid regex: ${result.error}`)));
+      else finish(() => resolve(result.indexes ?? []));
+    });
+    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("exit", (code) => {
+      if (code !== 0)
+        finish(() =>
+          reject(new Error(`Regex worker exited with code ${code}.`)),
+        );
+    });
+  });
 }
 
 function entryLabel(entry: SessionEntry): string {
