@@ -52,22 +52,33 @@ export class BackgroundHandoff {
     return this.#job?.epoch === epoch && !this.#job.settled;
   }
 
-  /** Waits for the note of this epoch if it still covers a prefix of the branch. */
-  async take(
+  /** Returns a finished note only when it still covers a prefix of the branch. */
+  async takeReady(
     epoch: string | null,
     branch: readonly SessionEntry[],
-    signal: AbortSignal,
   ): Promise<BackgroundNote | undefined> {
     const job = this.#job;
     if (
       !job ||
+      !job.settled ||
       job.epoch !== epoch ||
       !branch.some((entry) => entry.id === job.leafId)
     ) {
       return undefined;
     }
-    const note = await Promise.race([job.note, aborted(signal)]);
+    const note = await job.note;
     return note && { ...note, leafId: job.leafId };
+  }
+
+  /** Cancels work tied to a branch that is no longer active. */
+  invalidate(epoch: string | null, branch: readonly SessionEntry[]): void {
+    if (
+      this.#job &&
+      (this.#job.epoch !== epoch ||
+        !branch.some((entry) => entry.id === this.#job?.leafId))
+    ) {
+      this.cancel();
+    }
   }
 
   cancel(): void {
@@ -90,14 +101,4 @@ export function firstEntryAfter(
         entry.type === "custom_message" ||
         (entry.type === "message" && entry.message.role !== "toolResult"),
     )?.id;
-}
-
-function aborted(signal: AbortSignal): Promise<undefined> {
-  return new Promise((resolve) => {
-    if (signal.aborted) resolve(undefined);
-    else
-      signal.addEventListener("abort", () => resolve(undefined), {
-        once: true,
-      });
-  });
 }

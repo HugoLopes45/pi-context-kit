@@ -1,7 +1,7 @@
 {
   "name": "pi-context-kit",
   "version": "0.2.0",
-  "description": "Context maintenance for Pi: stale read replacement, pruning, handoff compaction with background notes, and recall. Works with any model.",
+  "description": "Context maintenance for Pi: stale read replacement, pruning, handoff compaction with background notes, and recall.",
   "type": "module",
   "license": "MIT",
   "author": "HugoLopes45 (https://github.com/HugoLopes45)",

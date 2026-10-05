@@ -51,6 +51,15 @@ describe("searchEntries", () => {
     await expect(
       searchEntries(t.branch(), { query: "a", regex: true }, controller.signal),
     ).rejects.toThrow(/abort/i);
+
+    const running = new AbortController();
+    const pending = searchEntries(
+      t.branch(),
+      { query: "(a+)+$", regex: true },
+      running.signal,
+    );
+    setTimeout(() => running.abort(), 10);
+    await expect(pending).rejects.toThrow(/abort/i);
   });
 
   it("finds raw content that a context edit hides", async () => {

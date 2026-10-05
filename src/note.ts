@@ -7,14 +7,14 @@ export interface NoteRequest {
   registry: ModelRegistry;
   model: Model<Api>;
   sessionId: string;
-  /** The live LLM context, so the provider can reuse its prompt cache. */
+  /** Live context without reserialization; prompt-cache reuse is provider-dependent. */
   messages: readonly Message[];
   focus?: string;
   signal: AbortSignal;
   maxTokens?: number;
 }
 
-/** Asks the session model for a handoff note. Tools stay declared to keep the cached prefix, but tool use is disabled. */
+/** Keeps tool declarations unchanged for providers that cache them, but disables tool use. */
 export async function requestNote(
   request: NoteRequest,
 ): Promise<Note | undefined> {

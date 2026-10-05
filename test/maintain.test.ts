@@ -51,6 +51,24 @@ describe("planMaintenance", () => {
     expect(plan.tokens).toBeLessThan(56_000);
   });
 
+  it("keeps Pi's token count when no maintenance edit is persisted", () => {
+    const t = new Transcript();
+    t.user("small context");
+    const plan = planMaintenance({
+      entries: t.entries(),
+      edited: new Set(),
+      options: {
+        ...DEFAULT_CONFIG,
+        supersedeReads: false,
+        prune: { ...DEFAULT_CONFIG.prune, enabled: false },
+        shake: undefined,
+      },
+      tokens: 100_000,
+      threshold: 70_000,
+    });
+    expect(plan).toEqual({ edits: [], tokens: 100_000 });
+  });
+
   it("leaves reduction to compaction when pruning is not enough", () => {
     const t = new Transcript();
     t.tool("bash", { command: "a" }, filler(21_000));
@@ -96,9 +114,9 @@ describe("planMaintenance", () => {
 
   it("shakes only when shake options are given", () => {
     const t = new Transcript();
-    t.user(`<log>\n${filler(30_000)}\n</log>`);
+    t.assistant(`<log>\n${filler(30_000)}\n</log>`);
     t.assistant("ok");
-    t.user(filler(41_000));
+    t.assistant(filler(41_000));
     const input = {
       entries: t.entries(),
       edited: new Set<string>(),

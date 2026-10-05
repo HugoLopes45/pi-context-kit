@@ -21,6 +21,9 @@ const DEFAULT_CHARS = 20_000;
 const SNIPPET_CHARS = 160;
 const REGEX_DEADLINE_MS = 500;
 
+type RegexWorkerResult =
+  { type: "success"; indexes: number[] } | { type: "error"; error: string };
+
 /** Searches the raw text of every entry on the branch, including compacted and edited ones. */
 export async function searchEntries(
   branch: readonly SessionEntry[],
@@ -87,9 +90,9 @@ function regexIndexes(
     const { parentPort, workerData } = require("node:worker_threads");
     try {
       const pattern = new RegExp(workerData.query, "i");
-      parentPort.postMessage({ indexes: workerData.texts.map((text) => text.search(pattern)) });
+      parentPort.postMessage({ type: "success", indexes: workerData.texts.map((text) => text.search(pattern)) });
     } catch (error) {
-      parentPort.postMessage({ error: error.message });
+      parentPort.postMessage({ type: "error", error: error.message });
     }
   `;
   return new Promise((resolve, reject) => {
@@ -117,10 +120,10 @@ function regexIndexes(
       REGEX_DEADLINE_MS,
     );
     signal?.addEventListener("abort", onAbort, { once: true });
-    worker.once("message", (result: { indexes?: number[]; error?: string }) => {
-      if (result.error)
+    worker.once("message", (result: RegexWorkerResult) => {
+      if (result.type === "error")
         finish(() => reject(new Error(`Invalid regex: ${result.error}`)));
-      else finish(() => resolve(result.indexes ?? []));
+      else finish(() => resolve(result.indexes));
     });
     worker.once("error", (error) => finish(() => reject(error)));
     worker.once("exit", (code) => {
