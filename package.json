@@ -1,0 +1,50 @@
+{
+  "name": "pi-context-kit",
+  "version": "0.1.0",
+  "description": "Context maintenance for Pi: stale read replacement, pruning, handoff compaction with background notes, and recall. Works with any model.",
+  "type": "module",
+  "license": "MIT",
+  "author": "HugoLopes45 (https://github.com/HugoLopes45)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HugoLopes45/pi-context-kit.git"
+  },
+  "homepage": "https://github.com/HugoLopes45/pi-context-kit#readme",
+  "bugs": {
+    "url": "https://github.com/HugoLopes45/pi-context-kit/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "compaction",
+    "context",
+    "handoff"
+  ],
+  "files": [
+    "extensions",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit && vitest --run",
+    "test": "vitest --run",
+    "prepublishOnly": "test \"$(npm whoami)\" = hugolopes45 || { echo 'Publish only as the npm user hugolopes45.' >&2; exit 1; }; npm run check"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^1.0.3",
+    "@earendil-works/pi-coding-agent": "^1.0.3",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.11"
+  }
+}
