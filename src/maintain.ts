@@ -67,10 +67,8 @@ export function planMaintenance(input: MaintenanceInput): MaintenancePlan {
     projectedMessages(applyEdits(afterPrune, shaken)),
   );
   if (reducedTokens <= input.threshold * options.progressRatio) {
-    return {
-      edits: latestPerTarget([...stale, ...pruned, ...shaken]),
-      tokens: reducedTokens,
-    };
+    const edits = latestPerTarget([...stale, ...pruned, ...shaken]);
+    return edits.length > 0 ? { edits, tokens: reducedTokens } : unchanged;
   }
   // Compaction runs next. Stale edits only shrink what it has to summarize.
   return stale.length > 0 ? { edits: stale, tokens: staleTokens } : unchanged;

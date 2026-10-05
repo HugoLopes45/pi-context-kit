@@ -22,10 +22,14 @@ describe("shake", () => {
     const edits = shake(t.entries(), ELIDE);
     expect(edits).toHaveLength(1);
     expect(edits[0]?.targetId).toBe(user);
-    expect(edits[0]?.content).toBe(
-      `before\n[Elided block: about 303 tokens. Call recall with entryId "${user}" to read it.]\n` +
-        `after [Elided block: about 304 tokens. Call recall with entryId "${user}" to read it.] end`,
-    );
+    expect(edits[0]?.content).toEqual([
+      {
+        type: "text",
+        text:
+          `before\n[Elided block: about 303 tokens. Call recall with entryId "${user}" to read it.]\n` +
+          `after [Elided block: about 304 tokens. Call recall with entryId "${user}" to read it.] end`,
+      },
+    ]);
   });
 
   it("preserves user instructions and user images", () => {

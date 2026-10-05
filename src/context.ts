@@ -46,7 +46,7 @@ export function messageTokens(message: AgentMessage): number {
   return estimateTokens(message);
 }
 
-/** Tokens of every projected message after each entry index. */
+/** Tokens from each entry through the end of the projected context. */
 export function suffixTokens(
   entries: readonly ProjectedSessionEntry[],
 ): number[] {

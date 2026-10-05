@@ -24,18 +24,24 @@ describe("supersededReads", () => {
 
   it("does not treat a truncated whole-file read as covering older ranges", () => {
     const t = new Transcript();
-    const old = t.tool(
-      "read",
-      { path: "a.ts", offset: 2_001, limit: 20 },
-      filler(500),
-    );
+    t.tool("read", { path: "a.ts", offset: 2_001, limit: 20 }, filler(500));
     t.tool(
       "read",
       { path: "a.ts" },
       `${filler(500)}\n\n[Showing lines 1-2000 of 3000. Use offset=2001 to continue.]`,
     );
     expect(staleIds(t)).toEqual([]);
-    expect(old).toBeDefined();
+  });
+
+  it("does not let a truncated ranged read cover its matching range", () => {
+    const t = new Transcript();
+    t.tool("read", { path: "a.ts", offset: 1, limit: 500 }, filler(500));
+    t.tool(
+      "read",
+      { path: "a.ts", offset: 1, limit: 500 },
+      `${filler(100)}\n[Showing lines 1-100 of 500 (50.0KB limit). Use offset=101 to continue.]`,
+    );
+    expect(staleIds(t)).toEqual([]);
   });
 
   it("keeps reads of other paths and different ranges", () => {
@@ -74,10 +80,9 @@ describe("supersededReads", () => {
 
   it("counts the candidate itself against the suffix limit", () => {
     const t = new Transcript();
-    const old = t.tool("read", { path: "a.ts" }, filler(12_000));
+    t.tool("read", { path: "a.ts" }, filler(12_000));
     t.tool("read", { path: "a.ts" }, filler(100));
     expect(staleIds(t, 8_000)).toEqual([]);
-    expect(old).toBeDefined();
   });
 
   it("skips candidates followed by more than the suffix limit", () => {

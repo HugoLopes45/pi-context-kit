@@ -5,7 +5,7 @@ import { Transcript } from "./fixtures.ts";
 const NOTE = { note: "note" };
 
 describe("BackgroundHandoff", () => {
-  it("runs once per compaction epoch and hands the note over", async () => {
+  it("runs once per compaction epoch and hands over a ready note", async () => {
     const t = new Transcript();
     const leaf = t.user("hi");
     const background = new BackgroundHandoff();
@@ -13,9 +13,8 @@ describe("BackgroundHandoff", () => {
     expect(background.start(null, leaf, run, () => {})).toBe(true);
     expect(background.start(null, leaf, run, () => {})).toBe(false);
     expect(run).toHaveBeenCalledTimes(1);
-    expect(
-      await background.take(null, t.branch(), new AbortController().signal),
-    ).toEqual({
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(await background.takeReady(null, t.branch())).toEqual({
       ...NOTE,
       leafId: leaf,
     });
@@ -47,21 +46,17 @@ describe("BackgroundHandoff", () => {
       async () => NOTE,
       () => {},
     );
-    expect(
-      await background.take("new", t.branch(), new AbortController().signal),
-    ).toBeUndefined();
+    expect(await background.takeReady("new", t.branch())).toBeUndefined();
     background.start(
       "new",
       "elsewhere",
       async () => NOTE,
       () => {},
     );
-    expect(
-      await background.take("new", t.branch(), new AbortController().signal),
-    ).toBeUndefined();
+    expect(await background.takeReady("new", t.branch())).toBeUndefined();
   });
 
-  it("reports failures and stops waiting when aborted", async () => {
+  it("does not wait for unfinished notes and cancels obsolete branch work", async () => {
     const t = new Transcript();
     const leaf = t.user("hi");
     const background = new BackgroundHandoff();
@@ -72,14 +67,14 @@ describe("BackgroundHandoff", () => {
       async () => Promise.reject(new Error("boom")),
       (error) => errors.push(error),
     );
-    expect(
-      await background.take(null, t.branch(), new AbortController().signal),
-    ).toBeUndefined();
+    expect(await background.takeReady(null, t.branch())).toBeUndefined();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(errors).toEqual([new Error("boom")]);
+    background.cancel();
 
-    const slow = new BackgroundHandoff();
     let jobSignal: AbortSignal | undefined;
-    slow.start(
+    background.start(
       null,
       leaf,
       (signal) => {
@@ -88,11 +83,8 @@ describe("BackgroundHandoff", () => {
       },
       () => {},
     );
-    const waiting = new AbortController();
-    const taken = slow.take(null, t.branch(), waiting.signal);
-    waiting.abort();
-    expect(await taken).toBeUndefined();
-    slow.cancel();
+    expect(await background.takeReady(null, t.branch())).toBeUndefined();
+    background.invalidate(null, []);
     expect(jobSignal?.aborted).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   type Edit,
@@ -25,8 +26,8 @@ interface NewerReads {
 /**
  * Replaces read results that a newer read of the same file makes redundant.
  * A newer full read covers every older read; a newer ranged read covers only the same range;
- * a failed read covers only older failed reads. Only candidates followed by at most
- * `suffixLimit` tokens are edited, so the cached prompt prefix stays intact.
+ * a failed read covers only older failed reads. A candidate and its newer messages must fit
+ * within `suffixLimit` tokens.
  */
 export function supersededReads(
   entries: readonly ProjectedSessionEntry[],
@@ -51,10 +52,8 @@ export function supersededReads(
       fullSuccess: false,
       successRanges: new Set<string>(),
     };
-    const fullReadCoversFile =
-      key.range === undefined &&
-      !message.isError &&
-      !isTruncatedRead(message.content);
+    const readCoversOutput =
+      !message.isError && !isTruncatedRead(message.content);
     const superseded = message.isError
       ? seen.anyRead
       : seen.fullSuccess ||
@@ -74,21 +73,16 @@ export function supersededReads(
     }
 
     seen.anyRead = true;
-    if (!message.isError) {
-      if (fullReadCoversFile) seen.fullSuccess = true;
-      else if (key.range !== undefined) seen.successRanges.add(key.range);
+    if (readCoversOutput) {
+      if (key.range === undefined) seen.fullSuccess = true;
+      else seen.successRanges.add(key.range);
     }
     newer.set(key.path, seen);
   }
   return edits.reverse();
 }
 
-function isTruncatedRead(
-  content: Extract<
-    NonNullable<ReturnType<typeof editableMessage>>,
-    { role: "toolResult" }
-  >["content"],
-): boolean {
+function isTruncatedRead(content: ToolResultMessage["content"]): boolean {
   return content.some(
     (block) =>
       block.type === "text" &&

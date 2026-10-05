@@ -110,6 +110,7 @@ export default function contextKit(pi: ExtensionAPI): void {
     messages: Message[] | undefined;
     focus?: string;
     signal: AbortSignal;
+    cancelBackground: () => void;
   }) => {
     const { ctx, branch, ready } = input;
     const compaction = (note: Note, firstKeptEntryId: string) => ({
@@ -126,7 +127,15 @@ export default function contextKit(pi: ExtensionAPI): void {
       if (fits(result.summary, kept, input.limit, input.config.progressRatio))
         return result;
     }
-    if (!input.messages) return undefined;
+    const retained = keptTokens(ctx, input.keptEntryId);
+    const availableTokens = Math.floor(
+      input.limit * input.config.progressRatio - retained,
+    );
+    if (!input.messages || availableTokens <= 0) {
+      input.cancelBackground();
+      return undefined;
+    }
+    input.cancelBackground();
     const note = await requestNote({
       registry: ctx.modelRegistry,
       model: input.model,
@@ -134,8 +143,18 @@ export default function contextKit(pi: ExtensionAPI): void {
       messages: input.messages,
       focus: input.focus,
       signal: input.signal,
+      maxTokens: Math.min(input.model.maxTokens, availableTokens),
     });
-    return note && compaction(note, input.keptEntryId);
+    if (!note) return undefined;
+    const result = compaction(note, input.keptEntryId);
+    return fits(
+      result.summary,
+      retained,
+      input.limit,
+      input.config.progressRatio,
+    )
+      ? result
+      : undefined;
   };
 
   pi.on("turn_end", async (event, ctx) => {
@@ -164,17 +183,28 @@ export default function contextKit(pi: ExtensionAPI): void {
 
     const leafId = ctx.sessionManager.getLeafId();
     const current = epoch(branch);
-    // Pi compacts at its own threshold, through session_before_compact.
-    const own = limit < piThreshold(model) && result.tokens > limit;
+    background.invalidate(current, branch);
+    // Try ordered strategies at Pi's threshold before its native hook can compact.
+    const own = result.tokens > limit;
     if (model && leafId && before(methods, "handoff", "soft")) {
       const messages = () =>
         convertToLlm(projectedMessages(applyEdits(entries, result.edits)));
+      const keepRecentTokens = compactionSettings(model).keepRecentTokens;
+      const keptEntryId = own ? recentStart(ctx, keepRecentTokens) : undefined;
+      const speculativeKeptId = recentStart(ctx, keepRecentTokens);
+      const speculativeBudget = speculativeKeptId
+        ? Math.floor(
+            limit * config.progressRatio - keptTokens(ctx, speculativeKeptId),
+          )
+        : 0;
       if (
         config.asyncEnabled &&
+        speculativeBudget > 0 &&
         result.tokens > limit - speculationLead(limit) &&
         result.tokens <= limit
       ) {
         const context = messages();
+        const maxTokens = Math.min(model.maxTokens, speculativeBudget);
         background.start(
           current,
           leafId,
@@ -185,15 +215,14 @@ export default function contextKit(pi: ExtensionAPI): void {
               sessionId: ctx.sessionManager.getSessionId(),
               messages: context,
               signal,
+              maxTokens,
             }),
           (error) => warn(ctx, error, "A new note is written at compaction."),
         );
       }
-      const keptEntryId =
-        own && recentStart(branch, compactionSettings(model).keepRecentTokens);
       if (own && keptEntryId && failedEpoch !== current) {
-        // The note being written lands at a later turn; Pi's threshold still bounds the wait.
-        if (background.writing(current)) return { entries: drafts() };
+        const writing = background.writing(current);
+        if (writing && limit < piThreshold(model)) return { entries: drafts() };
         const signal = ctx.signal ?? new AbortController().signal;
         try {
           const compaction = await handoff({
@@ -201,11 +230,12 @@ export default function contextKit(pi: ExtensionAPI): void {
             model,
             config,
             branch,
-            ready: await background.take(current, branch, signal),
+            ready: await background.takeReady(current, branch),
             keptEntryId,
             limit,
-            messages: messages(),
+            messages: writing ? undefined : messages(),
             signal,
+            cancelBackground: () => background.cancel(),
           });
           if (compaction) {
             background.cancel();
@@ -221,7 +251,8 @@ export default function contextKit(pi: ExtensionAPI): void {
         }
       }
     }
-    if (own && !shakeFirst && methods.includes("shake")) result = plan(true);
+    const shakeAfterHandoff = !shakeFirst && before(methods, "shake", "soft");
+    if (tokens > limit && shakeAfterHandoff) result = plan(true);
     return result.edits.length > 0 ? { entries: drafts() } : undefined;
   });
 
@@ -235,8 +266,15 @@ export default function contextKit(pi: ExtensionAPI): void {
     )
       return undefined;
     const { preparation, branchEntries, signal } = event;
+    const currentEpoch = epoch(branchEntries);
+    if (event.reason === "threshold" && failedEpoch === currentEpoch)
+      return undefined;
     const limit = Math.min(threshold(model, config), model.contextWindow);
     try {
+      const current = currentEpoch;
+      background.invalidate(current, branchEntries);
+      if (event.customInstructions) background.cancel();
+      const writing = !event.customInstructions && background.writing(current);
       const compaction = await handoff({
         ctx,
         model,
@@ -245,13 +283,17 @@ export default function contextKit(pi: ExtensionAPI): void {
         // A focused /compact needs a note written for that focus.
         ready: event.customInstructions
           ? undefined
-          : await background.take(epoch(branchEntries), branchEntries, signal),
+          : await background.takeReady(current, branchEntries),
         keptEntryId: preparation.firstKeptEntryId,
         limit,
         // The live context no longer fits the model after an overflow.
-        messages: event.reason === "overflow" ? undefined : liveMessages(ctx),
+        messages:
+          event.reason === "overflow" || writing
+            ? undefined
+            : liveMessages(ctx),
         focus: event.customInstructions,
         signal,
+        cancelBackground: () => background.cancel(),
       });
       return (
         compaction && {
@@ -340,20 +382,38 @@ function fits(
   return Math.ceil(summary.length / 4) + kept <= limit * ratio;
 }
 
-/** Whether `a` comes first in `methods`, or `b` is absent. */
+/** Soft ends the extension's strategy chain, even when other methods follow it. */
 function before(methods: readonly Method[], a: Method, b: Method): boolean {
   const index = methods.indexOf(a);
   const other = methods.indexOf(b);
-  return index >= 0 && (other < 0 || index < other);
+  const soft = methods.indexOf("soft");
+  const stop = Math.min(
+    other >= 0 ? other : Number.POSITIVE_INFINITY,
+    soft >= 0 ? soft : Number.POSITIVE_INFINITY,
+  );
+  return index >= 0 && index < stop;
 }
 
-/** Where Pi would start the kept part: about `keepRecentTokens` back, after the latest compaction. */
+/** Finds the retained boundary from model-visible entries, including prior compaction tails and edits. */
 function recentStart(
-  branch: SessionEntry[],
+  ctx: ExtensionContext,
   keepRecentTokens: number,
 ): string | undefined {
-  const latest = getLatestCompactionEntry(branch);
-  const start = latest ? branch.indexOf(latest) + 1 : 0;
-  const cut = findCutPoint(branch, start, branch.length, keepRecentTokens);
-  return branch[cut.firstKeptEntryIndex]?.id;
+  const entries: SessionEntry[] = [];
+  for (const projected of ctx.sessionManager.buildSessionProjection().entries) {
+    const source = projected.sourceEntry;
+    if (source.type === "compaction") continue;
+    for (const message of projected.messages) {
+      if (message.role === "system") continue;
+      entries.push({
+        type: "message",
+        id: source.id,
+        parentId: source.parentId,
+        timestamp: source.timestamp,
+        message,
+      });
+    }
+  }
+  const cut = findCutPoint(entries, 0, entries.length, keepRecentTokens);
+  return entries[cut.firstKeptEntryIndex]?.id;
 }
