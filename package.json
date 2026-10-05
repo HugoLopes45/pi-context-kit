@@ -1,6 +1,6 @@
 {
   "name": "pi-context-kit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Context maintenance for Pi: stale read replacement, pruning, handoff compaction with background notes, and recall. Works with any model.",
   "type": "module",
   "license": "MIT",
