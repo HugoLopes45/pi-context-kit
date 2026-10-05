@@ -17,6 +17,7 @@ interface Job {
   leafId: string;
   controller: AbortController;
   note: Promise<Note | undefined>;
+  settled: boolean;
 }
 
 /** One speculative handoff note per compaction epoch, written while the agent keeps working. */
@@ -33,12 +34,22 @@ export class BackgroundHandoff {
     if (this.#job?.epoch === epoch) return false;
     this.cancel();
     const controller = new AbortController();
-    const note = run(controller.signal).catch((error: unknown) => {
-      if (!controller.signal.aborted) onError(error);
-      return undefined;
-    });
-    this.#job = { epoch, leafId, controller, note };
+    const note = run(controller.signal)
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) onError(error);
+        return undefined;
+      })
+      .finally(() => {
+        job.settled = true;
+      });
+    const job: Job = { epoch, leafId, controller, note, settled: false };
+    this.#job = job;
     return true;
+  }
+
+  /** Whether the note of this epoch is still being written. */
+  writing(epoch: string | null): boolean {
+    return this.#job?.epoch === epoch && !this.#job.settled;
   }
 
   /** Waits for the note of this epoch if it still covers a prefix of the branch. */

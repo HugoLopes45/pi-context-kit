@@ -21,6 +21,23 @@ describe("BackgroundHandoff", () => {
     });
   });
 
+  it("reports whether the note of an epoch is still being written", async () => {
+    const background = new BackgroundHandoff();
+    let finish = (_: typeof NOTE) => {};
+    background.start(
+      null,
+      "leaf",
+      () => new Promise((resolve) => (finish = resolve)),
+      () => {},
+    );
+    expect(background.writing(null)).toBe(true);
+    expect(background.writing("other")).toBe(false);
+    finish(NOTE);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(background.writing(null)).toBe(false);
+  });
+
   it("ignores a job from another epoch or branch", async () => {
     const t = new Transcript();
     const background = new BackgroundHandoff();
