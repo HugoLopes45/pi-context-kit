@@ -35,7 +35,9 @@ async function start(
   writeFileSync(join(cwd, "a.ts"), "export const a = 1;\n".repeat(200));
   writeFileSync(join(cwd, "b.ts"), "export const b = 2;\n".repeat(1_000));
   const faux = fauxProvider({
-    models: [{ id: "faux-1", contextWindow, maxTokens: 4_096 }],
+    models: [
+      { id: "faux-1", contextWindow, maxTokens: 4_096, reasoning: true },
+    ],
   });
   faux.setResponses(responses);
   const settings = {
@@ -72,7 +74,7 @@ async function start(
     cwd,
     agentDir,
     model: faux.getModel(),
-    thinkingLevel: "off",
+    thinkingLevel: "high",
     modelRuntime,
     resourceLoader,
     settingsManager,
@@ -113,12 +115,16 @@ describe("pi-context-kit inside Pi", () => {
   );
 
   it("compacts with a handoff note from the live context and Pi's file sections", async () => {
+    let turnOptions: SimpleStreamOptions | undefined;
     let handoffOptions: SimpleStreamOptions | undefined;
     let handoffMessages = 0;
     const { session } = await start([
       fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
       fauxAssistantMessage("first done"),
-      fauxAssistantMessage("second done"),
+      (_context, options) => {
+        turnOptions = options;
+        return fauxAssistantMessage("second done");
+      },
       (context, options) => {
         handoffOptions = options;
         handoffMessages = context.messages.length;
@@ -131,7 +137,10 @@ describe("pi-context-kit inside Pi", () => {
       session.sessionManager.buildSessionProjection().messages.length;
     const result = await session.compact("the next step");
 
-    expect(handoffOptions?.toolChoice).toBe("none");
+    // Anthropic drops the cached message prefix when thinking or tool_choice differ.
+    expect(turnOptions?.reasoning).toBe("high");
+    expect(handoffOptions?.reasoning).toBe(turnOptions?.reasoning);
+    expect(handoffOptions?.toolChoice).toBe(turnOptions?.toolChoice);
     expect(handoffOptions?.maxTokens).toBe(4_096);
     expect(handoffMessages).toBe(live + 1);
     expect(result.summary).toBe(
@@ -367,6 +376,173 @@ describe("pi-context-kit inside Pi", () => {
     expect(JSON.stringify(session.messages.at(-1))).toContain("done");
   });
 
+  it("compacts with Pi's summary at an early threshold when the note fails", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    const reply: FauxResponseStep = (context) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note"))
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "note failed",
+        });
+      if (last.includes("<conversation>"))
+        return fauxAssistantMessage("## Goal\nPi summary");
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), 200_000, true, {
+      thresholdTokens: 13_000,
+      asyncEnabled: false,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    const compactions = session.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(compactions).toHaveLength(1);
+    expect(compactions[0]?.summary).toContain("Pi summary");
+    expect(JSON.stringify(session.messages.at(-1))).toContain("done");
+  });
+
+  it.each([
+    ["soft is not in methodOrder", 200_000, ["handoff", "shake"]],
+    ["the threshold equals Pi's", 14_000, ["soft"]],
+  ])("writes no early summary when %s", async (_, contextWindow, order) => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    const reply: FauxResponseStep = (context) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note"))
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "note failed",
+        });
+      if (last.includes("<conversation>"))
+        return fauxAssistantMessage("## Goal\nPi summary");
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), contextWindow, true, {
+      thresholdTokens: 13_000,
+      methodOrder: order,
+      asyncEnabled: false,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    expect(
+      session.sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "compaction" && entry.fromHook),
+    ).toEqual([]);
+  });
+
+  it("writes no early summary when only the previous summary precedes the retained context", async () => {
+    let summaries = 0;
+    const reply: FauxResponseStep = (context) => {
+      if (JSON.stringify(context.messages.at(-1)).includes("<conversation>")) {
+        summaries++;
+        return fauxAssistantMessage("## Goal\nPi summary");
+      }
+      return fauxAssistantMessage("done");
+    };
+    const { session } = await start(
+      Array(4).fill(reply),
+      200_000,
+      true,
+      { thresholdTokens: 13_000, methodOrder: ["soft"] },
+      50_000,
+    );
+    await session.prompt("Hi");
+    const first = session.sessionManager
+      .getBranch()
+      .find((entry) => entry.type === "message");
+    session.sessionManager.appendCompaction(
+      `## Goal\n${"old ".repeat(12_000)}`,
+      first?.id ?? null,
+      0,
+    );
+    await session.prompt("Again");
+    expect(summaries).toBe(0);
+  });
+
+  it("updates the previous summary in an early summary", async () => {
+    const main = [
+      fauxAssistantMessage("hello"),
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let request = "";
+    const reply: FauxResponseStep = (context) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("<conversation>")) {
+        request = last;
+        return fauxAssistantMessage("## Goal\nPi summary");
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(6).fill(reply), 200_000, true, {
+      thresholdTokens: 13_000,
+      methodOrder: ["soft"],
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt("Hi");
+    const first = session.sessionManager
+      .getBranch()
+      .find((entry) => entry.type === "message");
+    session.sessionManager.appendCompaction(
+      "## Goal\nOld goal",
+      first?.id ?? null,
+      0,
+    );
+    await session.prompt(`Read b.ts. ${"history ".repeat(2_500)}`);
+    expect(request).toContain("<previous-summary>");
+    expect(request).toContain("Old goal");
+  });
+
+  it("does not retry a failed early summary every turn", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let summaries = 0;
+    const reply: FauxResponseStep = (context) => {
+      if (JSON.stringify(context.messages.at(-1)).includes("<conversation>")) {
+        summaries++;
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "summary failed",
+        });
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), 200_000, true, {
+      thresholdTokens: 13_000,
+      methodOrder: ["soft"],
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    expect(summaries).toBe(1);
+    expect(JSON.stringify(session.messages.at(-1))).toContain("done");
+  });
+
   it("falls back to Pi when a fresh note exceeds the retained-context budget", async () => {
     const { session } = await start(
       [
@@ -570,10 +746,16 @@ describe("pi-context-kit inside Pi", () => {
       fauxAssistantMessage("done"),
     ];
     let notes = 0;
+    let summaries = 0;
     const reply: FauxResponseStep = (context) => {
-      if (JSON.stringify(context.messages.at(-1)).includes("handoff note")) {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note")) {
         notes++;
         return fauxAssistantMessage("## Goal\nContinue the inspection");
+      }
+      if (last.includes("<conversation>")) {
+        summaries++;
+        return fauxAssistantMessage("## Goal\nPi summary");
       }
       const next = main.shift();
       if (!next) throw new Error("unexpected request");
@@ -590,8 +772,9 @@ describe("pi-context-kit inside Pi", () => {
     await session.prompt("Read b.ts");
     const branch = session.sessionManager.getBranch();
     expect(notes).toBe(first === "handoff" ? 1 : 0);
+    expect(summaries).toBe(first === "soft" ? 1 : 0);
     expect(branch.filter((entry) => entry.type === "compaction")).toHaveLength(
-      first === "handoff" ? 1 : 0,
+      first === "shake" ? 0 : 1,
     );
     expect(
       branch.filter((entry) => entry.type === "context_edit"),

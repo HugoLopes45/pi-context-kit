@@ -19,13 +19,20 @@ describe("handoffContext", () => {
 });
 
 describe("handoffNote", () => {
-  it("joins text blocks and ignores tool calls", () => {
+  it("joins text blocks", () => {
     const response = fauxAssistantMessage([
       { type: "text", text: "## Goal" },
-      { type: "toolCall", id: "c", name: "read", arguments: {} },
       { type: "text", text: "Ship it" },
     ]);
     expect(handoffNote(response)).toBe("## Goal\nShip it");
+  });
+
+  it("rejects a reply that calls a tool instead of writing the note", () => {
+    const response = fauxAssistantMessage([
+      { type: "text", text: "Let me check first." },
+      { type: "toolCall", id: "c", name: "read", arguments: {} },
+    ]);
+    expect(() => handoffNote(response)).toThrow("called a tool");
   });
 
   it("rejects length-truncated notes", () => {

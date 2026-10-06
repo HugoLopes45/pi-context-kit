@@ -61,6 +61,10 @@ export function handoffNote(response: AssistantMessage): string | undefined {
       response.errorMessage ?? `Handoff request ${response.stopReason}`,
     );
   }
+  // Text next to a tool call is a preamble to more work, not a note.
+  if (response.content.some((block) => block.type === "toolCall")) {
+    throw new Error("Handoff request called a tool");
+  }
   const note = response.content
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("\n")
