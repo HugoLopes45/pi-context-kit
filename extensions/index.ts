@@ -9,6 +9,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   findCutPoint,
+  generateSummaryWithUsage,
   getLatestCompactionEntry,
   type SessionEntry,
   SettingsManager,
@@ -44,6 +45,8 @@ export default function contextKit(pi: ExtensionAPI): void {
   let reported = "";
   /** The compaction epoch in which a threshold note failed, so it is not retried every turn. */
   let failedEpoch: string | null | undefined;
+  /** The same for Pi's summary at the extension's own threshold. */
+  let softFailedEpoch: string | null | undefined;
 
   /** Reads `contextKit` from Pi's settings on each use, so `/reload` and project settings apply. */
   const settings = (ctx: ExtensionContext): ContextKitConfig => {
@@ -91,12 +94,66 @@ export default function contextKit(pi: ExtensionAPI): void {
   const epoch = (branch: SessionEntry[]) =>
     getLatestCompactionEntry(branch)?.id ?? null;
 
-  const warn = (ctx: ExtensionContext, error: unknown, fallback: string) => {
+  const warn = (
+    ctx: ExtensionContext,
+    error: unknown,
+    fallback: string,
+    what = "handoff note",
+  ) => {
     const message = error instanceof Error ? error.message : String(error);
     ctx.ui.notify(
-      `pi-context-kit: handoff note failed (${message}). ${fallback}`,
+      `pi-context-kit: ${what} failed (${message}). ${fallback}`,
       "warning",
     );
+  };
+
+  /** Pi's summary at the extension's threshold, because Pi's own hook waits for Pi's threshold. */
+  const soft = async (input: {
+    ctx: ExtensionContext;
+    model: Model<Api>;
+    config: ContextKitConfig;
+    branch: SessionEntry[];
+    entries: Parameters<typeof projectedMessages>[0];
+    limit: number;
+  }) => {
+    const { ctx, model, config, limit } = input;
+    const { keepRecentTokens, reserveTokens } = compactionSettings(model);
+    const keptEntryId = recentStart(ctx, keepRecentTokens);
+    if (!keptEntryId) return undefined;
+    const retained = keptTokens(ctx, keptEntryId);
+    if (!fits("", retained, limit, config.progressRatio)) return undefined;
+    const start = input.entries.findIndex(
+      (entry) => entry.sourceEntry.id === keptEntryId,
+    );
+    // As in Pi, the previous summary goes to the update prompt, not into the history.
+    const previous = input.entries.findIndex(
+      (entry) =>
+        entry.sourceEntry.type === "compaction" && entry.messages.length > 0,
+    );
+    if (start <= previous + 1) return undefined;
+    const source = input.entries[previous]?.sourceEntry;
+    const { text, usage } = await generateSummaryWithUsage(
+      projectedMessages(input.entries.slice(previous + 1, start)),
+      model,
+      reserveTokens,
+      undefined,
+      undefined,
+      ctx.signal,
+      undefined,
+      source?.type === "compaction" ? source.summary : undefined,
+      pi.getThinkingLevel(),
+      // The registry resolves auth per request, as for handoff notes.
+      (model, context, options) =>
+        ctx.modelRegistry.streamSimple(model, context, options),
+      undefined,
+      undefined,
+      undefined,
+      ctx.sessionManager.getSessionId(),
+    );
+    const summary = handoffSummary(text, input.branch);
+    return fits(summary.summary, retained, limit, config.progressRatio)
+      ? { ...summary, firstKeptEntryId: keptEntryId, usage }
+      : undefined;
   };
 
   /**
@@ -254,12 +311,38 @@ export default function contextKit(pi: ExtensionAPI): void {
         } catch (error) {
           failedEpoch = current;
           if (!signal.aborted)
-            warn(ctx, error, "Pi compacts at its own threshold instead.");
+            warn(ctx, error, "The remaining methods in methodOrder are tried.");
         }
       }
     }
     const shakeAfterHandoff = !shakeFirst && before(methods, "shake", "soft");
     if (tokens > limit && shakeAfterHandoff) result = plan(true);
+    const softDue =
+      model &&
+      result.tokens > limit &&
+      limit < piThreshold(model) &&
+      methods.includes("soft") &&
+      softFailedEpoch !== current;
+    if (softDue) {
+      try {
+        const compaction = await soft({
+          ctx,
+          model,
+          config,
+          branch,
+          entries: applyEdits(entries, result.edits),
+          limit,
+        });
+        if (compaction)
+          return {
+            entries: [...drafts(), { type: "compaction", ...compaction }],
+          };
+      } catch (error) {
+        if (!ctx.signal?.aborted)
+          warn(ctx, error, "Pi compacts at its own threshold.", "Pi's summary");
+      }
+      softFailedEpoch = current;
+    }
     return result.edits.length > 0 ? { entries: drafts() } : undefined;
   });
 

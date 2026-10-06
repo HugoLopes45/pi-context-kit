@@ -53,7 +53,7 @@ Add a `contextKit` object to `~/.pi/agent/settings.json` or `.pi/settings.json`.
 | `enabled` | `true` | Set to `false` to disable maintenance and handoff compaction. `recall` stays available. |
 | `thresholdTokens` | `-1` | Starts automatic maintenance above this token count. Overrides `thresholdPercent`. `-1` uses `thresholdPercent`. |
 | `thresholdPercent` | `-1` | Starts automatic maintenance above this percentage of the context window, at most 99%. `-1` uses Pi's threshold only. |
-| `methodOrder` | `["handoff", "shake", "soft"]` | What runs, in order, when pruning is not enough. `handoff`: a note by the session model. `shake`: elides large old code or XML blocks and images, without a model call. `soft`: Pi's own summary. `remote` and `snapcompact` are accepted and skipped, because Pi lacks them. |
+| `methodOrder` | `["handoff", "shake", "soft"]` | What runs, in order, when pruning is not enough. `handoff`: a note by the session model. `shake`: elides large old code or XML blocks and images, without a model call. `soft`: Pi's summary, written at this threshold when it is below Pi's own. `remote` and `snapcompact` are accepted and skipped, because Pi lacks them. |
 | `asyncEnabled` | `true` | Writes the handoff note in the background before the threshold. |
 | `supersedeReads` | `true` | Replaces older reads of a file that was read again. |
 | `staleSuffixTokens` | `8000` | Replaces superseded reads only when the entire replaced entry and newer suffix fit this many tokens. |
@@ -66,11 +66,11 @@ Add a `contextKit` object to `~/.pi/agent/settings.json` or `.pi/settings.json`.
 | `shake.minSavings` | `4000` | Shakes nothing unless the savings reach this many tokens. |
 | `shake.blockMinTokens` | `400` | Blocks smaller than this stay. |
 
-`methodOrder` controls end-of-turn maintenance. `soft` ends that sequence and leaves compaction to Pi at its own threshold; methods after `soft` do not run. A failed or unavailable handoff can fall back to `shake` before `soft`.
+`methodOrder` controls end-of-turn maintenance. `soft` ends that sequence: below Pi's threshold it compacts with Pi's summary, which updates any previous summary; methods after `soft` do not run. A failed or unavailable handoff can fall back to `shake` before `soft`.
 
 Pi's compaction hook cannot append context edits. Manual compaction, overflow recovery, and compaction triggered before a turn can use a handoff note or Pi's summary, but cannot run `shake` there.
 
-Pi still compacts at its own threshold (`compaction.reserveTokens`, `compaction.modelOverrides`). Earlier thresholds request maintenance, not guaranteed compaction: an oversized retained tool result may leave no room for a useful note. Budget checks use Pi's token estimates; actual provider token counts and cache behavior can differ.
+Pi still compacts at its own threshold (`compaction.reserveTokens`, `compaction.modelOverrides`). Earlier thresholds request maintenance, not guaranteed compaction: an oversized retained tool result may leave no room for a useful note or summary, and a failed summary is not retried until the next compaction. Budget checks use Pi's token estimates; actual provider token counts and cache behavior can differ.
 
 ## Development
 
