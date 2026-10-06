@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.1
+
 - Rewrite the README for users who do not know Pi internals: it explains the terms, the sequence of a session, and each setting with its default and an example.
 
 ## 0.2.0
