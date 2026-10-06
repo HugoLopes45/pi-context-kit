@@ -32,7 +32,7 @@ Notes:
 - After a context overflow, a ready background note is used. Otherwise Pi's summary runs, because the live context no longer fits the model.
 - User-role messages are never shaken, preserving instructions and images. Tool calls and thinking blocks are never edited; each tool call keeps its result, and signed reasoning stays valid. Images removed from eligible tool outputs can only be recalled as metadata.
 - With Pi's compaction disabled, only superseded reads are replaced.
-- The note request disables tool use (`toolChoice: "none"`) and caps output to the available budget. Providers can differ; failures use Pi's summary. Prompt-cache reuse is provider-dependent and is not guaranteed.
+- The note request uses the session's thinking level and tool choice, because Anthropic drops the cached messages when either differs. A reply that calls a tool is rejected. The request caps output to the available budget. Providers can differ; failures use Pi's summary. Prompt-cache reuse is provider-dependent and is not guaranteed.
 - Subagents run the extension in their own sessions with their own settings. Without a UI, warnings are not shown.
 
 ## Settings

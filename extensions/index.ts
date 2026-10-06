@@ -60,6 +60,11 @@ export default function contextKit(pi: ExtensionAPI): void {
     return config;
   };
 
+  const reasoning = () => {
+    const level = pi.getThinkingLevel();
+    return level === "off" ? undefined : level;
+  };
+
   const compactionSettings = (model: Model<Api>) =>
     SettingsManager.inMemory(pi.getSettings()).getCompactionSettings(model);
 
@@ -141,6 +146,7 @@ export default function contextKit(pi: ExtensionAPI): void {
       model: input.model,
       sessionId: ctx.sessionManager.getSessionId(),
       messages: input.messages,
+      reasoning: reasoning(),
       focus: input.focus,
       signal: input.signal,
       maxTokens: Math.min(input.model.maxTokens, availableTokens),
@@ -214,6 +220,7 @@ export default function contextKit(pi: ExtensionAPI): void {
               model,
               sessionId: ctx.sessionManager.getSessionId(),
               messages: context,
+              reasoning: reasoning(),
               signal,
               maxTokens,
             }),
