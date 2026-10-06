@@ -2,11 +2,10 @@
 
 ## Unreleased
 
-- Send handoff note requests with the session's thinking level and tool choice, so Anthropic reuses the cached conversation instead of re-billing it; reject notes that call a tool.
-- `soft` now writes Pi's summary at `thresholdTokens` or `thresholdPercent`, so an earlier threshold compacts even when no handoff note is available. Before, Pi compacted only at its own threshold.
-
 ## 0.2.0
 
+- Send handoff note requests with the session's thinking level and tool choice, so Anthropic reuses the cached conversation instead of re-billing it; reject notes that call a tool.
+- `soft` now writes Pi's summary at `thresholdTokens` or `thresholdPercent`, so an earlier threshold compacts even when no handoff note is available. Before, Pi compacted only at its own threshold.
 - Keep older read results when a newer full or ranged read is truncated, count the replaced read in the stale suffix budget, and preserve user-role messages during shaking.
 - Bound recall regex searches in a worker and propagate cancellation; keep regex syntax errors and result paging.
 - Reject length-truncated or oversized handoff notes, validate retained-context budgets, and use only ready background notes during native, manual, and overflow compaction.
