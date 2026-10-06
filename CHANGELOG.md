@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rewrite the README for users who do not know Pi internals: it explains the terms, the sequence of a session, and each setting with its default and an example.
+
 ## 0.2.0
 
 - Send handoff note requests with the session's thinking level and tool choice, so Anthropic reuses the cached conversation instead of re-billing it; reject notes that call a tool.
