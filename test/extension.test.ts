@@ -35,7 +35,9 @@ async function start(
   writeFileSync(join(cwd, "a.ts"), "export const a = 1;\n".repeat(200));
   writeFileSync(join(cwd, "b.ts"), "export const b = 2;\n".repeat(1_000));
   const faux = fauxProvider({
-    models: [{ id: "faux-1", contextWindow, maxTokens: 4_096 }],
+    models: [
+      { id: "faux-1", contextWindow, maxTokens: 4_096, reasoning: true },
+    ],
   });
   faux.setResponses(responses);
   const settings = {
@@ -72,7 +74,7 @@ async function start(
     cwd,
     agentDir,
     model: faux.getModel(),
-    thinkingLevel: "off",
+    thinkingLevel: "high",
     modelRuntime,
     resourceLoader,
     settingsManager,
@@ -113,12 +115,16 @@ describe("pi-context-kit inside Pi", () => {
   );
 
   it("compacts with a handoff note from the live context and Pi's file sections", async () => {
+    let turnOptions: SimpleStreamOptions | undefined;
     let handoffOptions: SimpleStreamOptions | undefined;
     let handoffMessages = 0;
     const { session } = await start([
       fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
       fauxAssistantMessage("first done"),
-      fauxAssistantMessage("second done"),
+      (_context, options) => {
+        turnOptions = options;
+        return fauxAssistantMessage("second done");
+      },
       (context, options) => {
         handoffOptions = options;
         handoffMessages = context.messages.length;
@@ -131,7 +137,10 @@ describe("pi-context-kit inside Pi", () => {
       session.sessionManager.buildSessionProjection().messages.length;
     const result = await session.compact("the next step");
 
-    expect(handoffOptions?.toolChoice).toBe("none");
+    // Anthropic drops the cached message prefix when thinking or tool_choice differ.
+    expect(turnOptions?.reasoning).toBe("high");
+    expect(handoffOptions?.reasoning).toBe(turnOptions?.reasoning);
+    expect(handoffOptions?.toolChoice).toBe(turnOptions?.toolChoice);
     expect(handoffOptions?.maxTokens).toBe(4_096);
     expect(handoffMessages).toBe(live + 1);
     expect(result.summary).toBe(
