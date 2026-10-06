@@ -83,12 +83,24 @@ The tests run offline with Pi's faux provider.
 
 ## Contributing and releases
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and pull requests. Report vulnerabilities through [SECURITY.md](SECURITY.md), not public issues.
+
 1. Open a pull request. CI runs `npm run check` on Node 22 and 24.
 2. Add user-visible changes under `## Unreleased` in `CHANGELOG.md`.
-3. To release, run `npm run release -- <patch|minor|major|x.y.z>` from an up-to-date, clean `main`. The script names the `Unreleased` section after the version, updates `package.json`, runs the checks, and opens a release pull request.
-4. Merge the release pull request. The `Release` workflow publishes the package to npm with provenance and creates the GitHub release from the CHANGELOG section.
+3. Choose `patch` for fixes, `minor` for compatible features, or `major` for breaking changes.
+4. Run `npm run release -- <patch|minor|major|x.y.z>` from an up-to-date, clean `main`. This opens a release PR with matching package and lockfile versions, versioned notes, and an empty `Unreleased` section.
+5. Merge the release PR, then wait for CI to succeed on the exact `main` commit you want to publish.
+6. Create `vX.Y.Z` at that commit and push that tag. The tag must match the package version. Release tags cannot be moved or deleted.
+7. As the repository owner, launch **Publish release** at that tag: `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
+8. Approve the `npm` environment deployment. The owner can approve their own run; no third-party approval is needed.
 
-The workflow publishes through npm trusted publishing, so the repository stores no npm token.
+Merges, pushes, and tag creation never publish. The manual workflow requires an existing stable-version tag, matching manifests and release notes, and successful CI on its exact commit. That commit must belong to `main`. The dispatch ref and input tag must match. Running from the tag keeps npm provenance tied to the selected commit.
+
+The workflow tests and publishes that commit, not the current tip of `main`, then creates the GitHub release. A new npm publication updates the `latest` dist-tag.
+
+If publication fails, fix the cause and use **Re-run failed jobs** on the original run, with the same tag. An existing npm version must have the same source commit; mismatches fail instead of overwriting a release. For code changes, prepare a new version and tag. npm can take time to make an accepted publication visible.
+
+The workflow uses npm trusted publishing, so the repository stores no npm token. Configure the npm trusted publisher for this repository, `release.yml`, and the GitHub environment `npm`. Restrict that environment to tags `v*`, with the owner as its required reviewer and self-review allowed. The workflow checks that the tagged commit belongs to `main`. Protect `v*` tags from updates and deletion, with no bypass actors. Keep these repository protections enabled to preserve release identity across retries.
 
 ## License
 

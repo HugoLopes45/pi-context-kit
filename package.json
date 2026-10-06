@@ -32,7 +32,7 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit && vitest --run",
+    "check": "node scripts/release.ts check && tsc --noEmit && vitest --run",
     "test": "vitest --run",
     "release": "node scripts/release.ts prepare",
     "prepublishOnly": "test -n \"$GITHUB_ACTIONS\" || test \"$(npm whoami)\" = hugolopes45 || { echo 'Publish only as the npm user hugolopes45.' >&2; exit 1; }; npm run check"
