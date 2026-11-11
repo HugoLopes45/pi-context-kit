@@ -26,7 +26,8 @@ const BLOCK =
 
 /**
  * Elides large blocks and images from older messages. Tool calls and thinking stay intact,
- * so every tool call keeps its result and signed reasoning stays valid.
+ * so every tool call keeps its result. Signatures stay valid, but Anthropic drops every thinking
+ * block after the first changed message.
  */
 export function shake(
   entries: readonly ProjectedSessionEntry[],

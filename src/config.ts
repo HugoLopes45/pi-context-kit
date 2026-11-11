@@ -12,8 +12,6 @@ export interface ContextKitConfig {
   methodOrder: Method[];
   /** Replace older reads of a file that was read again. */
   supersedeReads: boolean;
-  /** Superseded reads are replaced only within this many newest tokens, to keep the prompt cache. */
-  staleSuffixTokens: number;
   prune: PruneOptions & { enabled: boolean };
   shake: ShakeOptions;
   /** Pruning and shaking must reach this fraction of the threshold, or compaction runs instead. */
@@ -39,7 +37,6 @@ export const DEFAULT_CONFIG: ContextKitConfig = {
   thresholdPercent: -1,
   methodOrder: [...METHODS],
   supersedeReads: true,
-  staleSuffixTokens: 8_000,
   prune: {
     enabled: true,
     protectTokens: 40_000,
@@ -154,11 +151,6 @@ export function readConfig(raw: unknown): ConfigResult {
   );
   const methods = root.get("methodOrder", methodOrder, d.methodOrder);
   const supersedeReads = root.get("supersedeReads", boolean, d.supersedeReads);
-  const staleSuffixTokens = root.get(
-    "staleSuffixTokens",
-    count,
-    d.staleSuffixTokens,
-  );
   const progressRatio = root.get("progressRatio", ratio, d.progressRatio);
 
   const p = root.section("prune");
@@ -188,7 +180,6 @@ export function readConfig(raw: unknown): ConfigResult {
       thresholdPercent,
       methodOrder: [...new Set(methods.filter(isMethod))],
       supersedeReads,
-      staleSuffixTokens,
       prune,
       shake,
       progressRatio,

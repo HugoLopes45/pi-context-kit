@@ -3,12 +3,8 @@ import { editedEntryIds } from "../src/context.ts";
 import { SUPERSEDED_NOTICE, supersededReads } from "../src/stale.ts";
 import { filler, Transcript } from "./fixtures.ts";
 
-function staleIds(t: Transcript, suffixLimit = 8_000): string[] {
-  return supersededReads(
-    t.entries(),
-    editedEntryIds(t.branch()),
-    suffixLimit,
-  ).map((edit) => edit.targetId);
+function staleIds(t: Transcript): string[] {
+  return supersededReads(t.entries(), editedEntryIds(t.branch())).map((edit) => edit.targetId);
 }
 
 describe("supersededReads", () => {
@@ -16,7 +12,7 @@ describe("supersededReads", () => {
     const t = new Transcript();
     const old = t.tool("read", { path: "a.ts" }, filler(500));
     t.tool("read", { path: "a.ts" }, filler(500));
-    const edits = supersededReads(t.entries(), new Set(), 8_000);
+    const edits = supersededReads(t.entries(), new Set());
     expect(edits).toEqual([
       { targetId: old, content: [{ type: "text", text: SUPERSEDED_NOTICE }] },
     ]);
@@ -76,21 +72,6 @@ describe("supersededReads", () => {
     t.tool("read", { path: "a.ts" }, `ENOENT ${filler(50)}`, true);
     expect(staleIds(t)).toEqual([failure]);
     expect(staleIds(t)).not.toContain(success);
-  });
-
-  it("counts the candidate itself against the suffix limit", () => {
-    const t = new Transcript();
-    t.tool("read", { path: "a.ts" }, filler(12_000));
-    t.tool("read", { path: "a.ts" }, filler(100));
-    expect(staleIds(t, 8_000)).toEqual([]);
-  });
-
-  it("skips candidates followed by more than the suffix limit", () => {
-    const t = new Transcript();
-    t.tool("read", { path: "a.ts" }, filler(500));
-    t.tool("bash", { command: "ls" }, filler(9_000));
-    t.tool("read", { path: "a.ts" }, filler(500));
-    expect(staleIds(t)).toEqual([]);
   });
 
   it("skips entries that are already edited or too small to shrink", () => {

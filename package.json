@@ -23,8 +23,7 @@
   ],
   "files": [
     "extensions",
-    "src",
-    "CHANGELOG.md"
+    "src"
   ],
   "pi": {
     "extensions": [
@@ -32,19 +31,20 @@
     ]
   },
   "scripts": {
-    "check": "node scripts/release.ts check && tsc --noEmit && vitest --run",
+    "check": "tsc --noEmit && vitest --run",
     "test": "vitest --run",
-    "release": "node scripts/release.ts prepare",
     "prepublishOnly": "test -n \"$GITHUB_ACTIONS\" || test \"$(npm whoami)\" = hugolopes45 || { echo 'Publish only as the npm user hugolopes45.' >&2; exit 1; }; npm run check"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^1.0.3",
-    "@earendil-works/pi-coding-agent": "^1.0.3",
+    "@earendil-works/pi-ai": "^1.5.2",
+    "@earendil-works/pi-coding-agent": "^1.5.2",
     "@types/node": "^26.6.4",
+    "typebox": "^1.3.27",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   }

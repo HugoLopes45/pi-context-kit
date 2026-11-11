@@ -1,9 +1,5 @@
-import {
-  type Api,
-  type Message,
-  type Model,
-  Type,
-} from "@earendil-works/pi-ai";
+import { type Api, type Message, type Model } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import {
   convertToLlm,
   type ExtensionAPI,
@@ -243,6 +239,11 @@ export default function contextKit(pi: ExtensionAPI): void {
     const shakeFirst = before(methods, "shake", "handoff");
     let result = plan(shakeFirst);
     const drafts = () => toDrafts(result.edits);
+    // Without compaction, edits that leave the context above the threshold break the cache again next turn.
+    const persisted = () =>
+      result.edits.length > 0 && result.tokens <= limit
+        ? { entries: drafts() }
+        : undefined;
 
     const leafId = ctx.sessionManager.getLeafId();
     const current = epoch(branch);
@@ -286,7 +287,7 @@ export default function contextKit(pi: ExtensionAPI): void {
       }
       if (own && keptEntryId && failedEpoch !== current) {
         const writing = background.writing(current);
-        if (writing && limit < piThreshold(model)) return { entries: drafts() };
+        if (writing && limit < piThreshold(model)) return persisted();
         const signal = ctx.signal ?? new AbortController().signal;
         try {
           const compaction = await handoff({
@@ -343,7 +344,7 @@ export default function contextKit(pi: ExtensionAPI): void {
       }
       softFailedEpoch = current;
     }
-    return result.edits.length > 0 ? { entries: drafts() } : undefined;
+    return persisted();
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -396,6 +397,10 @@ export default function contextKit(pi: ExtensionAPI): void {
     }
   });
 
+  pi.on("session_tree", (_event, ctx) => {
+    const branch = ctx.sessionManager.getBranch();
+    background.invalidate(epoch(branch), branch);
+  });
   pi.on("session_compact", () => background.cancel());
   pi.on("session_shutdown", () => background.cancel());
 
@@ -403,8 +408,9 @@ export default function contextKit(pi: ExtensionAPI): void {
     name: "recall",
     label: "Recall",
     description:
-      "Search or read the full session history, including messages removed by compaction and tool outputs that were pruned or elided. " +
-      "Pass `query` to list matching entries with their IDs, newest first. Pass `entryId` to read one entry in full.",
+      "Search or read earlier text on the current session branch, including messages removed by compaction and tool outputs that were pruned or elided. " +
+      "Other branches are excluded. Images are represented only by MIME type. " +
+      "Pass `query` to list matching entries with their IDs, newest first. Pass `entryId` to read one entry's text, with pagination for large entries.",
     parameters: Type.Object({
       query: Type.Optional(
         Type.String({ description: "Text to find, case-insensitive." }),

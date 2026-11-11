@@ -54,7 +54,15 @@ async function start(
     authPath: join(agentDir, "auth.json"),
     modelsPath: join(agentDir, "models.json"),
   });
-  modelRuntime.registerNativeProvider(faux.provider);
+  // Pi 1.0 faux usage counts a session's first prompt as input and cache write; without the cache every version reports the same tokens.
+  modelRuntime.registerNativeProvider({
+    ...faux.provider,
+    streamSimple: (model, context, options) =>
+      faux.provider.streamSimple(model, context, {
+        ...options,
+        cacheRetention: "none",
+      }),
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -90,7 +98,7 @@ describe("pi-context-kit inside Pi", () => {
     ["enabled", true],
     ["disabled", false],
   ])(
-    "replaces an older read of the same file with compaction %s",
+    "keeps an older read below the threshold with compaction %s",
     async (_, enabled) => {
       const { session } = await start(
         [
@@ -102,17 +110,54 @@ describe("pi-context-kit inside Pi", () => {
         enabled,
       );
       await session.prompt("Read a.ts twice");
-      const edits = session.sessionManager
-        .getBranch()
-        .filter((entry) => entry.type === "context_edit");
-      expect(edits).toHaveLength(1);
       expect(
-        JSON.stringify(
-          session.sessionManager.buildSessionProjection().messages,
-        ),
-      ).toContain("[Superseded by a newer read of this file]");
+        session.sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "context_edit"),
+      ).toEqual([]);
     },
   );
+
+  it("replaces an older read when that brings the context below the threshold", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      { thresholdTokens: 8_000, methodOrder: [] },
+    );
+    await session.prompt("Read b.ts twice");
+    const edits = session.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "context_edit");
+    expect(edits).toHaveLength(1);
+    expect(
+      JSON.stringify(session.sessionManager.buildSessionProjection().messages),
+    ).toContain("[Superseded by a newer read of this file]");
+  });
+
+  // An edit without compaction costs the provider cache again at each turn above the threshold.
+  it("keeps an older read above the threshold when nothing compacts", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+        fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      { thresholdTokens: 1_000, methodOrder: [] },
+    );
+    await session.prompt("Read a.ts twice");
+    expect(
+      session.sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "context_edit"),
+    ).toEqual([]);
+  });
 
   it("compacts with a handoff note from the live context and Pi's file sections", async () => {
     let turnOptions: SimpleStreamOptions | undefined;
@@ -193,7 +238,7 @@ describe("pi-context-kit inside Pi", () => {
       if (!next) throw new Error("unexpected request");
       return next;
     };
-    const { session } = await start(Array(8).fill(reply), 24_000, true, {
+    const { session } = await start(Array(8).fill(reply), 19_000, true, {
       asyncEnabled: true,
       supersedeReads: false,
       prune: { enabled: false },
@@ -218,6 +263,62 @@ describe("pi-context-kit inside Pi", () => {
     expect(noteMessages[0]).toBeLessThan(live + 1);
     expect(result.summary).toMatch(/^## Goal\nBackground note/);
   });
+
+  it.each(["tree", "reload"])(
+    "cancels an unfinished background note on %s",
+    async (action) => {
+      const main = [
+        ...Array.from({ length: 3 }, () =>
+          fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        ),
+        fauxAssistantMessage("done"),
+      ];
+      let noteSignal: AbortSignal | undefined;
+      const reply: FauxResponseStep = (context, options) => {
+        if (JSON.stringify(context.messages.at(-1)).includes("handoff note")) {
+          const signal = options?.signal;
+          if (!signal) throw new Error("missing note cancellation signal");
+          noteSignal = signal;
+          return new Promise((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+              { once: true },
+            );
+          });
+        }
+        const next = main.shift();
+        if (!next) throw new Error("unexpected request");
+        return next;
+      };
+      const { session } = await start(Array(8).fill(reply), 19_000, true, {
+        supersedeReads: false,
+        prune: { enabled: false },
+        progressRatio: 1,
+      });
+      await session.prompt("Read b.ts three times");
+      expect(noteSignal?.aborted).toBe(false);
+      try {
+        if (action === "reload") await session.reload();
+        else {
+          const target = session.sessionManager
+            .getBranch()
+            .find(
+              (entry) =>
+                entry.type === "message" && entry.message.role === "assistant",
+            );
+          if (!target) throw new Error("missing tree navigation target");
+          expect(await session.navigateTree(target.id)).toMatchObject({
+            cancelled: false,
+          });
+        }
+        expect(noteSignal?.aborted).toBe(true);
+      } finally {
+        await session.reload();
+      }
+    },
+  );
 
   it("tries shake at Pi's threshold instead of waiting for an unfinished note", async () => {
     const main = [
@@ -251,7 +352,7 @@ describe("pi-context-kit inside Pi", () => {
       if (!next) throw new Error("unexpected request");
       return next;
     };
-    const { session, cwd } = await start(Array(12).fill(reply), 24_000, true, {
+    const { session, cwd } = await start(Array(12).fill(reply), 17_500, true, {
       supersedeReads: false,
       prune: { enabled: false },
       shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
@@ -365,7 +466,7 @@ describe("pi-context-kit inside Pi", () => {
       supersedeReads: false,
       prune: { enabled: false },
     });
-    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     const compactions = session.sessionManager
       .getBranch()
       .filter((entry) => entry.type === "compaction");
@@ -401,7 +502,7 @@ describe("pi-context-kit inside Pi", () => {
       supersedeReads: false,
       prune: { enabled: false },
     });
-    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     const compactions = session.sessionManager
       .getBranch()
       .filter((entry) => entry.type === "compaction");
@@ -439,7 +540,7 @@ describe("pi-context-kit inside Pi", () => {
       supersedeReads: false,
       prune: { enabled: false },
     });
-    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     expect(
       session.sessionManager
         .getBranch()
@@ -508,7 +609,7 @@ describe("pi-context-kit inside Pi", () => {
       first?.id ?? null,
       0,
     );
-    await session.prompt(`Read b.ts. ${"history ".repeat(2_500)}`);
+    await session.prompt(`Read b.ts. ${"history ".repeat(5_000)}`);
     expect(request).toContain("<previous-summary>");
     expect(request).toContain("Old goal");
   });
@@ -538,7 +639,7 @@ describe("pi-context-kit inside Pi", () => {
       supersedeReads: false,
       prune: { enabled: false },
     });
-    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(2_500)}`);
+    await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     expect(summaries).toBe(1);
     expect(JSON.stringify(session.messages.at(-1))).toContain("done");
   });
@@ -630,7 +731,7 @@ describe("pi-context-kit inside Pi", () => {
     "shakes after a failed handoff with a %i-token context window",
     async (contextWindow) => {
       const main = [
-        fauxAssistantMessage(["```ts", "x".repeat(40_000), "```"].join("\n")),
+        fauxAssistantMessage(["```ts", "x".repeat(56_000), "```"].join("\n")),
         fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
         fauxAssistantMessage("done"),
       ];
@@ -741,7 +842,7 @@ describe("pi-context-kit inside Pi", () => {
     ["soft", "shake", "handoff"],
   ])("honors automatic priority %s, %s, %s", async (first, second, third) => {
     const main = [
-      fauxAssistantMessage(["```ts", "x".repeat(40_000), "```"].join("\n")),
+      fauxAssistantMessage(["```ts", "x".repeat(56_000), "```"].join("\n")),
       fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
       fauxAssistantMessage("done"),
     ];

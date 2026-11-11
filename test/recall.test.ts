@@ -62,6 +62,22 @@ describe("searchEntries", () => {
     await expect(pending).rejects.toThrow(/abort/i);
   });
 
+  it("excludes abandoned branches from search and reads", async () => {
+    const t = new Transcript();
+    const root = t.user("shared history");
+    const abandoned = t.assistant("ABANDONED-MARKER");
+    t.session.branch(root);
+    t.assistant("current branch");
+
+    expect(await searchEntries(t.branch(), { query: "ABANDONED-MARKER" })).toBe(
+      "No entries match.",
+    );
+    expect(() => readEntry(t.branch(), abandoned, {})).toThrow(
+      `No entry ${abandoned} on the current branch.`,
+    );
+    expect(t.session.getEntry(abandoned)).toBeDefined();
+  });
+
   it("finds raw content that a context edit hides", async () => {
     const t = new Transcript();
     const id = t.tool("read", { path: "a.ts" }, "secret value");
@@ -88,6 +104,30 @@ describe("readEntry", () => {
     expect(() => readEntry(t.branch(), "missing", {})).toThrow(
       /No entry missing/,
     );
+  });
+
+  it("keeps raw images after edits but recalls only their MIME type", () => {
+    const t = new Transcript();
+    const image = {
+      type: "image",
+      data: "AAAA",
+      mimeType: "image/png",
+    } as const;
+    const id = t.tool("read", { path: "a.png" }, [image]);
+    t.session.appendContextEdit(id, {
+      content: [{ type: "text", text: "[image elided]" }],
+    });
+
+    const entry = t.session.getEntry(id);
+    if (entry?.type !== "message" || entry.message.role !== "toolResult")
+      throw new Error("missing raw image result");
+    expect(entry.message.content).toEqual([image]);
+    expect(readEntry(t.branch(), id, {})).toBe(
+      "[read result]\n[image image/png]",
+    );
+    expect(
+      JSON.stringify(t.session.buildSessionProjection().messages),
+    ).not.toContain('"data":"AAAA"');
   });
 
   it("describes tool calls and images", () => {

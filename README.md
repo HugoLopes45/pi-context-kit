@@ -1,7 +1,8 @@
 # pi-context-kit
 
 pi-context-kit keeps long [Pi](https://github.com/earendil-works/pi) sessions small, so the AI model can continue to work.
-You install it once. After that, it works automatically.
+Install it once. The defaults work without configuration.
+Summaries can lose details. `recall` retrieves earlier text on the current branch, but returns only MIME types for images.
 
 ## The problem
 
@@ -14,9 +15,9 @@ A summary can lose details, and it costs time and money.
 
 pi-context-kit does three things:
 
-1. It removes text that the model does not need any more, before the window is full.
-2. When a summary is necessary, it prepares a better summary in advance.
-3. It keeps all removed text available. The model can read it again with the `recall` tool.
+1. It replaces repeated file reads and old tool outputs in the model's context.
+2. When a summary is necessary, it can prepare a handoff note in advance.
+3. It leaves the original session entries unchanged. The model can retrieve earlier text on the current branch with `recall`.
 
 ## Words used in this document
 
@@ -102,7 +103,7 @@ Sometimes the model reads the same file two times. The first copy is then old.
 pi-context-kit replaces the old copy with this text: `[Superseded by a newer read of this file]`.
 
 It does this only when the newer read covers all of the old read. If the newer read was cut short, the old copy stays.
-It does this only for recent entries, limited by `staleSuffixTokens`. This limit tries to keep the prompt cache useful, but the provider decides about caching.
+It does this only when the context is above the threshold, in the same change as pruning, shaking or compaction. Each change to old text makes the provider read all later text again without its cache. With Anthropic, it also removes the model's earlier reasoning from the request. One change near the threshold costs less than one change at each turn.
 
 ### 2. A handoff note is prepared in advance
 
@@ -132,18 +133,25 @@ Your work continues during these steps. pi-context-kit never stops a running tas
 
 ### The `recall` tool
 
-The model can always read removed text again. The `recall` tool can:
+The `recall` tool reads original session text, not the shortened context sent to the model. It can:
 
-- search all messages of the current conversation branch, also the removed and summarized messages;
-- read one full entry, with the ID given in a notice.
+- search earlier conversation text on the current branch, including removed and summarized messages;
+- read an entry's text by ID, with pagination for large entries.
 
-Images cannot be recovered. `recall` shows only their file type.
+Other branches and sessions are excluded. System prompt entries are not searched.
+Images remain in the original session entries, but `recall` returns only their MIME types, not image content.
+The model must call `recall` to retrieve a missing detail. Retrieval is not automatic.
 
-## What it never changes
+## What maintenance preserves
 
-- Your messages. Your instructions and your images always stay.
-- The tool calls of the model, and the model's reasoning.
-- The pairs of tool call and tool result. Each tool call keeps its result.
+File-read replacement, pruning, and shaking do not rewrite the original session entries.
+In the model's context, these steps preserve:
+
+- Your messages, including your instructions and images.
+- The model's tool calls and reasoning. Anthropic can still drop the reasoning after an edited message (see [Old file reads are replaced](#1-old-file-reads-are-replaced)).
+- Tool-call and tool-result pairs. Each tool call keeps its result, but the result content can be shortened.
+
+Compaction is different: it replaces older context with a summary, including older user messages. The original entries remain in session history.
 
 ## Settings
 
@@ -175,7 +183,6 @@ Copy only the lines that you want to change.
     "methodOrder": ["handoff", "shake", "soft"],
     "asyncEnabled": true,
     "supersedeReads": true,
-    "staleSuffixTokens": 8000,
     "progressRatio": 0.8,
     "prune": {
       "enabled": true,
@@ -202,7 +209,6 @@ Copy only the lines that you want to change.
 | [`methodOrder`](#methodorder) | A list of `"handoff"`, `"shake"`, `"soft"` | `["handoff", "shake", "soft"]` | The methods to try, and their order. |
 | [`asyncEnabled`](#asyncenabled) | `true`, `false` | `true` | Prepares the handoff note in the background. |
 | [`supersedeReads`](#supersedereads) | `true`, `false` | `true` | Replaces old copies of a file that was read again. |
-| [`staleSuffixTokens`](#stalesuffixtokens) | A whole number, 0 or more | `8000` | Limits which old copies can be replaced. |
 | [`progressRatio`](#progressratio) | A number above 0, up to 1 | `0.8` | How small the context must become. |
 | [`prune.enabled`](#pruneenabled) | `true`, `false` | `true` | Turns pruning of old tool outputs on or off. |
 | [`prune.protectTokens`](#pruneprotecttokens) | A whole number, 0 or more | `40000` | The newest tool outputs that are never pruned. |
@@ -343,25 +349,10 @@ Replaces the old copy of a file when the model reads the same file again.
 - `true` (default): the old copy becomes `[Superseded by a newer read of this file]`.
 - `false`: all copies stay.
 
-This works at every turn, also below the threshold.
+This works only above the threshold, together with pruning and shaking.
 
 ```json
 { "contextKit": { "supersedeReads": false } }
-```
-
-### `staleSuffixTokens`
-
-Limits which old file copies `supersedeReads` can replace.
-pi-context-kit replaces an old copy only if the old copy and all newer text are smaller than this number of tokens. Thus only recent copies are replaced.
-
-Why: the provider can keep the start of the conversation in a cache. A change in old text can make the provider read all the text after it again, which costs more.
-
-- `8000` (default).
-- A larger value replaces more copies, but can cause more cache misses.
-- `0` replaces nothing. It has the same effect as `"supersedeReads": false`.
-
-```json
-{ "contextKit": { "staleSuffixTokens": 16000 } }
 ```
 
 ### `progressRatio`
@@ -546,27 +537,12 @@ npm run check
 ```
 
 The tests run offline with Pi's faux provider. They do not call a real model.
+Development uses Pi `1.5.2`. The oldest supported version is Pi `1.0.3`. CI checks the locked dependencies on Node 22 and 24, and Pi `1.0.3` and latest Pi on Node 24.
+Host-provided peer dependencies use `"*"`, as required by Pi's package guide. This is not a guarantee that every Pi version works.
 
 ## Contributing and releases
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and pull requests. Report vulnerabilities through [SECURITY.md](SECURITY.md), not public issues.
-
-1. Open a pull request. CI runs `npm run check` on Node 22 and 24.
-2. Add user-visible changes under `## Unreleased` in `CHANGELOG.md`.
-3. Choose `patch` for fixes, `minor` for compatible features, or `major` for breaking changes.
-4. Run `npm run release -- <patch|minor|major|x.y.z>` from an up-to-date, clean `main`. This opens a release PR with matching package and lockfile versions, versioned notes, and an empty `Unreleased` section.
-5. Merge the release PR, then wait for CI to succeed on the exact `main` commit you want to publish.
-6. Create `vX.Y.Z` at that commit and push that tag. The tag must match the package version. Release tags cannot be moved or deleted.
-7. As the repository owner, launch **Publish release** at that tag: `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
-8. Approve the `npm` environment deployment. The owner can approve their own run; no third-party approval is needed.
-
-Merges, pushes, and tag creation never publish. The manual workflow requires an existing stable-version tag, matching manifests and release notes, and successful CI on its exact commit. That commit must belong to `main`. The dispatch ref and input tag must match. Running from the tag keeps npm provenance tied to the selected commit.
-
-The workflow tests and publishes that commit, not the current tip of `main`, then creates the GitHub release. A new npm publication updates the `latest` dist-tag.
-
-If publication fails, fix the cause and use **Re-run failed jobs** on the original run, with the same tag. An existing npm version must have the same source commit; mismatches fail instead of overwriting a release. For code changes, prepare a new version and tag. npm can take time to make an accepted publication visible.
-
-The workflow uses npm trusted publishing, so the repository stores no npm token. Configure the npm trusted publisher for this repository, `release.yml`, and the GitHub environment `npm`. Restrict that environment to tags `v*`, with the owner as its required reviewer and self-review allowed. The workflow checks that the tagged commit belongs to `main`. Protect `v*` tags from updates and deletion, with no bypass actors. Keep these repository protections enabled to preserve release identity across retries.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks, pull requests and releases. Report vulnerabilities through [SECURITY.md](SECURITY.md), not public issues.
 
 ## License
 
