@@ -11,9 +11,9 @@ npm ci
 npm run check
 ```
 
-`npm run check` validates package and lockfile metadata, release notes, TypeScript, and the offline tests. The tests use Pi's faux provider, not a real model.
+`npm run check` validates TypeScript and the offline tests. The tests use Pi's faux provider, not a real model.
 
-CI also installs the latest published Pi packages on Node 24 and reruns these checks. It runs weekly, even without repository changes.
+CI also installs Pi `1.0.3`, the oldest supported version, and the latest published Pi packages on Node 24, and reruns these checks. It runs weekly, even without repository changes.
 Keep the lockfile baseline reproducible; do not replace it with an unbounded dependency tree. Host-provided peer dependencies stay `*`.
 
 For an optional manual test in Pi:
@@ -31,7 +31,7 @@ Do not load another copy of this extension in the same session.
 - Prefer existing Pi APIs and small changes over new dependencies or abstractions.
 - Add a regression test for a bug and check that it fails before the fix.
 - Do not weaken tests or input validation to pass checks.
-- Describe user-visible changes under `Unreleased` in `CHANGELOG.md`.
+- Give the pull request a title that describes the user-visible change. Release notes are generated from these titles.
 - Never include credentials, account data, or private conversation content in commits, screenshots, or logs.
 
 ## Pull requests
@@ -45,16 +45,23 @@ No third-party approval is required, so a solo maintainer can merge after CI suc
 
 ## Releases
 
-Release preparation requires Node 24 or later, npm publish permission through the configured workflow, and an authenticated GitHub CLI.
+Only the repository owner can publish. A GitHub release triggers **Publish release**, and the owner must approve the `npm` environment deployment.
 
-Follow the [release procedure](README.md#contributing-and-releases). Do not bump the package version in ordinary contribution pull requests.
+Do not bump the package version in pull requests. The release tag sets the published version.
 
-Merging a release PR only prepares the version. The PR must update both manifests and include nonempty versioned release notes. CI rejects version rollback.
+### Release procedure
 
-Only the repository owner can launch **Publish release** from an explicit `vX.Y.Z` tag whose commit belongs to `main`. The owner must also approve the `npm` environment deployment. Pushes and tag creation do not publish.
+1. Wait for CI to succeed on the `main` commit you want to publish.
+2. On GitHub, open **Releases > Draft a new release**.
+3. Create the tag `vX.Y.Z` on `main`. Choose `patch` for fixes, `minor` for compatible features, or `major` for breaking changes.
+4. Select **Generate release notes**, then **Publish release**.
+5. Approve the `npm` environment deployment in the Actions run.
 
-Retry a failed release from its original Actions run and tag. Do not move any release tag or reuse its version for different code.
-If the code needs a fix, open another release PR with a new version instead.
+The workflow rejects a release that is not from the owner, a prerelease, a tag that is not `vX.Y.Z`, a commit outside `main`, or a commit without successful CI. It runs `npm run check`, sets the package version from the tag and publishes with npm provenance. A new npm publication updates the `latest` dist-tag.
+
+Releases and `v*` tags are immutable. If publication fails for an external cause, use **Re-run failed jobs** on the original run. If the code needs a fix, publish a new version.
+
+The workflow uses npm trusted publishing, so the repository stores no npm token. Configure the npm trusted publisher for this repository, `release.yml`, and the GitHub environment `npm`. Restrict that environment to tags `v*`, with the owner as its required reviewer and self-review allowed.
 
 ## Security
 
