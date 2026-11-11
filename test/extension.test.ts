@@ -1026,6 +1026,41 @@ describe("pi-context-kit inside Pi", () => {
     );
   });
 
+  it("does not shake when replacing old reads alone brings the context under the threshold", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage([
+          {
+            type: "text",
+            text: ["```ts", "x = 1;".repeat(2_800), "```"].join("\n"),
+          },
+          fauxToolCall("read", { path: "b.ts" }),
+        ]),
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      {
+        thresholdTokens: 11_000,
+        asyncEnabled: false,
+        prune: { enabled: false },
+        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      },
+    );
+    await session.prompt("Read b.ts twice");
+    const branch = session.sessionManager.getBranch();
+    const replacements = branch.flatMap((entry) =>
+      entry.type === "context_edit" ? [JSON.stringify(entry.replacement)] : [],
+    );
+    expect(replacements).toHaveLength(1);
+    expect(replacements[0]).toContain("Superseded by a newer read");
+    expect(branch.filter((entry) => entry.type === "compaction")).toHaveLength(
+      0,
+    );
+    expect(JSON.stringify(session.messages.at(-1))).toContain("done");
+  });
+
   it("does not shake before soft when methodOrder puts soft first", async () => {
     const { session } = await start(
       [
