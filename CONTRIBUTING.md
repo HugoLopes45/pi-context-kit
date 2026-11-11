@@ -11,7 +11,7 @@ npm ci
 npm run check
 ```
 
-`npm run check` validates TypeScript and the offline tests. The tests use Pi's faux provider, not a real model.
+`npm run check` validates TypeScript, cyclomatic complexity (at most 10 per function, `npm run lint`), and the offline tests. Split a function that is too complex; inline `eslint-disable` comments have no effect. The tests use Pi's faux provider, not a real model.
 
 CI also installs Pi `1.0.3`, the oldest supported version, and the latest published Pi packages on Node 24, and reruns these checks. It runs weekly, even without repository changes.
 Keep the lockfile baseline reproducible; do not replace it with an unbounded dependency tree. Host-provided peer dependencies stay `*`.

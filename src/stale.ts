@@ -1,12 +1,7 @@
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
-import {
-  type Edit,
-  editableMessage,
-  messageTokens,
-  withContent,
-} from "./context.ts";
-import { toolCallsById } from "./tool-calls.ts";
+import { type Edit, messageTokens, withContent } from "./context.ts";
+import { newestToolResults, type ToolResult } from "./tool-calls.ts";
 
 export const SUPERSEDED_NOTICE = "[Superseded by a newer read of this file]";
 
@@ -31,47 +26,55 @@ export function supersededReads(
   entries: readonly ProjectedSessionEntry[],
   edited: ReadonlySet<string>,
 ): Edit[] {
-  const calls = toolCallsById(entries);
   const newer = new Map<string, NewerReads>();
   const edits: Edit[] = [];
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    const message = entry && editableMessage(entry);
-    if (!entry || message?.role !== "toolResult" || message.toolName !== "read")
-      continue;
-    const key = readKey(calls.get(message.toolCallId)?.arguments);
+  for (const result of newestToolResults(entries)) {
+    const key = result.message.toolName === "read" && readKey(result.args);
     if (!key) continue;
-
     const seen = newer.get(key.path) ?? {
       anyRead: false,
       fullSuccess: false,
       successRanges: new Set<string>(),
     };
-    const readCoversOutput =
-      !message.isError && !isTruncatedRead(message.content);
-    const superseded = message.isError
-      ? seen.anyRead
-      : seen.fullSuccess ||
-        (key.range !== undefined && seen.successRanges.has(key.range));
-
-    if (superseded && !edited.has(entry.sourceEntry.id)) {
-      const content = [{ type: "text" as const, text: SUPERSEDED_NOTICE }];
-      if (
-        messageTokens(withContent(message, content)) < messageTokens(message)
-      ) {
-        edits.push({ targetId: entry.sourceEntry.id, content });
-      }
+    if (!edited.has(result.id) && isSuperseded(result, key, seen)) {
+      const edit = supersededEdit(result);
+      if (edit) edits.push(edit);
     }
-
-    seen.anyRead = true;
-    if (readCoversOutput) {
-      if (key.range === undefined) seen.fullSuccess = true;
-      else seen.successRanges.add(key.range);
-    }
+    recordRead(seen, result, key);
     newer.set(key.path, seen);
   }
   return edits.reverse();
+}
+
+function isSuperseded(
+  { message }: ToolResult,
+  key: ReadKey,
+  seen: NewerReads,
+): boolean {
+  if (message.isError) return seen.anyRead;
+  return (
+    seen.fullSuccess ||
+    (key.range !== undefined && seen.successRanges.has(key.range))
+  );
+}
+
+function supersededEdit({ id, message }: ToolResult): Edit | undefined {
+  const content = [{ type: "text" as const, text: SUPERSEDED_NOTICE }];
+  return messageTokens(withContent(message, content)) < messageTokens(message)
+    ? { targetId: id, content }
+    : undefined;
+}
+
+function recordRead(
+  seen: NewerReads,
+  { message }: ToolResult,
+  key: ReadKey,
+): void {
+  seen.anyRead = true;
+  if (message.isError || isTruncatedRead(message.content)) return;
+  if (key.range === undefined) seen.fullSuccess = true;
+  else seen.successRanges.add(key.range);
 }
 
 function isTruncatedRead(content: ToolResultMessage["content"]): boolean {

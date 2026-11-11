@@ -44,20 +44,28 @@ export function shake(
     for (const message of entry.messages) {
       if (message.role !== "system") seen += messageTokens(message);
     }
-    const message = editableMessage(entry);
-    if (isProtected || !message || message.role === "user") continue;
-
-    const content = shakeContent(message, entry.sourceEntry.id, options);
-    if (content === undefined) continue;
-    const saved =
-      messageTokens(message) - messageTokens(withContent(message, content));
-    if (saved <= 0) continue;
-    savings += saved;
-    edits.push({ targetId: entry.sourceEntry.id, content });
+    const edit = isProtected ? undefined : shakeEdit(entry, options);
+    if (!edit) continue;
+    savings += edit.saved;
+    edits.push(edit.edit);
   }
   return savings >= options.minSavings && edits.length > 0
     ? edits.reverse()
     : [];
+}
+
+function shakeEdit(
+  entry: ProjectedSessionEntry,
+  options: ShakeOptions,
+): { edit: Edit; saved: number } | undefined {
+  const message = editableMessage(entry);
+  if (!message || message.role === "user") return undefined;
+  const targetId = entry.sourceEntry.id;
+  const content = shakeContent(message, targetId, options);
+  if (content === undefined) return undefined;
+  const saved =
+    messageTokens(message) - messageTokens(withContent(message, content));
+  return saved > 0 ? { edit: { targetId, content }, saved } : undefined;
 }
 
 function shakeContent(
