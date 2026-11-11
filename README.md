@@ -1,6 +1,6 @@
 # pi-context-kit
 
-Keep long [Pi](https://github.com/earendil-works/pi) sessions small without losing the original text. pi-context-kit removes old file copies and old tool outputs from the model's context, prepares the summary before Pi needs it, and lets the model read the original text again.
+Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). Keep long Pi sessions small without losing the original text: pi-context-kit removes old file copies and old tool outputs from the model's context, prepares the summary before Pi needs it, and lets the model read the original text again.
 
 ```sh
 pi install npm:pi-context-kit

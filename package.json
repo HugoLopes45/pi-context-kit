@@ -1,7 +1,7 @@
 {
   "name": "pi-context-kit",
   "version": "0.2.1",
-  "description": "Context maintenance for Pi: stale read replacement, pruning, handoff compaction with background notes, and recall.",
+  "description": "Pi compaction and context management for the Pi coding agent: replace stale file reads, prune old tool outputs, prepare handoff notes in the background, and recall the original text.",
   "type": "module",
   "license": "MIT",
   "author": "HugoLopes45 (https://github.com/HugoLopes45)",
@@ -15,11 +15,17 @@
   },
   "keywords": [
     "pi-package",
-    "pi-extension",
     "pi",
+    "pi-extension",
+    "pi-coding-agent",
     "compaction",
     "context",
-    "handoff"
+    "context-window",
+    "context-management",
+    "coding-agent",
+    "llm",
+    "handoff",
+    "token-optimization"
   ],
   "files": [
     "extensions",
