@@ -579,6 +579,51 @@ describe("pi-context-kit inside Pi", () => {
     expect(requests.at(-1)).toContain("Continue the inspection");
   });
 
+  it("cancels an unfinished note when /compact asks for a focus", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    let noteSignal: AbortSignal | undefined;
+    let abortedBeforeFocus: boolean | undefined;
+    const reply: FauxResponseStep = (context, options) => {
+      if (JSON.stringify(context.messages.at(-1)).includes("handoff note")) {
+        notes++;
+        if (notes > 1) {
+          abortedBeforeFocus = noteSignal?.aborted;
+          return fauxAssistantMessage("## Goal\nFocused note");
+        }
+        const signal = options?.signal;
+        if (!signal) throw new Error("missing note cancellation signal");
+        noteSignal = signal;
+        return new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+            { once: true },
+          );
+        });
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(12).fill(reply), 200_000, true, {
+      thresholdTokens: 12_000,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt("Read b.ts twice, then a.ts");
+    expect(noteSignal?.aborted).toBe(false);
+    const result = await session.compact("the next step");
+    expect(abortedBeforeFocus).toBe(true);
+    expect(notes).toBe(2);
+    expect(result.summary).toContain("Focused note");
+  });
+
   it("waits for an unfinished note at an early threshold instead of compacting", async () => {
     const main = [
       fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),

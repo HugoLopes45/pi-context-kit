@@ -266,13 +266,13 @@ export default function contextKit(pi: ExtensionAPI): void {
       return undefined;
     const writing = background.writing(current);
     if (writing && limit < piThreshold(model)) return "waiting" as const;
-    return tryHandoff(turn, recent, writing ? undefined : messages());
+    return tryHandoff(turn, recent, writing ? undefined : messages);
   };
 
   const tryHandoff = async (
     turn: Turn,
     keptEntryId: string,
-    messages: Message[] | undefined,
+    messages: (() => Message[]) | undefined,
   ) => {
     const { ctx, current } = turn;
     const signal = ctx.signal ?? new AbortController().signal;
@@ -285,7 +285,7 @@ export default function contextKit(pi: ExtensionAPI): void {
         ready: await background.takeReady(current, turn.branch),
         keptEntryId,
         limit: turn.limit,
-        messages,
+        messages: messages?.(),
         signal,
         cancelBackground: () => background.cancel(),
       });
