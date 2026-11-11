@@ -317,7 +317,7 @@ export default function contextKit(pi: ExtensionAPI): void {
       }
     }
     const shakeAfterHandoff = !shakeFirst && before(methods, "shake", "soft");
-    if (tokens > limit && shakeAfterHandoff) result = plan(true);
+    if (result.tokens > limit && shakeAfterHandoff) result = plan(true);
     const softDue =
       model &&
       result.tokens > limit &&

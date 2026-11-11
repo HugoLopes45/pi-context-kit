@@ -37,20 +37,20 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run check
       # Pi's packages depend on each other with caret ranges, so each one is pinned to match a real install.
       - name: Check oldest supported Pi
         if: matrix.node == 24
         run: |
           read -ra packages <<< "$PI_PACKAGES"
-          npm install --no-save --package-lock=false "${packages[@]/%/@1.0.3}"
+          npm install --ignore-scripts --no-save --package-lock=false "${packages[@]/%/@1.0.3}"
           npm run check
       - name: Check latest Pi
         if: matrix.node == 24
         run: |
           read -ra packages <<< "$PI_PACKAGES"
-          npm install --no-save --package-lock=false "${packages[@]/%/@latest}"
+          npm install --ignore-scripts --no-save --package-lock=false "${packages[@]/%/@latest}"
           npm run check
 
   workflow-security:

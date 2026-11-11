@@ -50,7 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Publish to npm
         run: |
           npm version "${TAG#v}" --no-git-tag-version --allow-same-version
