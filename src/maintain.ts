@@ -12,7 +12,7 @@ import { supersededReads } from "./stale.ts";
 
 export type MaintenanceOptions = Pick<
   ContextKitConfig,
-  "supersedeReads" | "staleSuffixTokens" | "prune" | "progressRatio"
+  "supersedeReads" | "prune" | "progressRatio"
 > & {
   /** Undefined leaves the context unshaken. */
   shake: ShakeOptions | undefined;
@@ -35,24 +35,19 @@ export interface MaintenancePlan {
 }
 
 /**
- * Plans context edits for one turn boundary. Any context edit makes Pi estimate the context
- * from characters, so edits are kept only when that estimate stays on the same side of the
- * compaction threshold, or when pruning and shaking make compaction unnecessary.
+ * Plans context edits for one turn boundary. Any context edit changes the prompt prefix, so the
+ * provider cache and, on Anthropic, the thinking blocks after the edit are lost. Edits are
+ * therefore made only above the compaction threshold, in one batch.
  */
 export function planMaintenance(input: MaintenanceInput): MaintenancePlan {
   const { options } = input;
   const unchanged = { edits: [], tokens: input.tokens };
+  if (input.tokens <= input.threshold) return unchanged;
+
   const stale = options.supersedeReads
-    ? supersededReads(input.entries, input.edited, options.staleSuffixTokens)
+    ? supersededReads(input.entries, input.edited)
     : [];
   const afterStale = applyEdits(input.entries, stale);
-  const staleTokens = contextTokens(projectedMessages(afterStale));
-
-  if (input.tokens <= input.threshold) {
-    return stale.length > 0 && staleTokens <= input.threshold
-      ? { edits: stale, tokens: staleTokens }
-      : unchanged;
-  }
 
   const edited = new Set([
     ...input.edited,
@@ -71,7 +66,9 @@ export function planMaintenance(input: MaintenanceInput): MaintenancePlan {
     return edits.length > 0 ? { edits, tokens: reducedTokens } : unchanged;
   }
   // Compaction runs next. Stale edits only shrink what it has to summarize.
-  return stale.length > 0 ? { edits: stale, tokens: staleTokens } : unchanged;
+  return stale.length > 0
+    ? { edits: stale, tokens: contextTokens(projectedMessages(afterStale)) }
+    : unchanged;
 }
 
 function latestPerTarget(edits: readonly Edit[]): Edit[] {

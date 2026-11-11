@@ -10,9 +10,20 @@ function staleSession() {
   return { t, old };
 }
 
+/** An older read of a.ts, far from the end, and more context than pruning can save. */
+function staleSessionBeforeCompaction() {
+  const t = new Transcript();
+  const old = t.tool("read", { path: "a.ts" }, filler(2_000));
+  t.tool("bash", { command: "a" }, filler(21_000));
+  t.tool("read", { path: "a.ts" }, filler(2_000));
+  t.tool("bash", { command: "b" }, filler(60_000));
+  return { t, old };
+}
+
 describe("planMaintenance", () => {
-  it("applies stale edits below the threshold", () => {
-    const { t, old } = staleSession();
+  // Any edit changes the prompt prefix: the provider cache and the later thinking blocks are lost.
+  it("applies no edits below the threshold", () => {
+    const { t } = staleSession();
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
@@ -20,20 +31,38 @@ describe("planMaintenance", () => {
       tokens: 4_100,
       threshold: 10_000,
     });
-    expect(plan.edits.map((edit) => edit.targetId)).toEqual([old]);
-    expect(plan.tokens).toBeLessThan(2_200);
+    expect(plan).toEqual({ edits: [], tokens: 4_100 });
   });
 
-  it("skips stale edits whose estimate would cross the threshold", () => {
-    const { t } = staleSession();
+  it("supersedes older reads anywhere in the context before compaction", () => {
+    const { t, old } = staleSessionBeforeCompaction();
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
       options: DEFAULT_CONFIG,
-      tokens: 1_000,
-      threshold: 1_500,
+      tokens: 85_100,
+      threshold: 70_000,
     });
-    expect(plan).toEqual({ edits: [], tokens: 1_000 });
+    expect(plan.edits.map((edit) => edit.targetId)).toEqual([old]);
+    expect(plan.tokens).toBeLessThan(84_000);
+  });
+
+  it("supersedes older reads together with pruning", () => {
+    const t = new Transcript();
+    const old = t.tool("read", { path: "a.ts" }, filler(2_000));
+    const output = t.tool("bash", { command: "a" }, filler(30_000));
+    t.tool("read", { path: "a.ts" }, filler(2_000));
+    t.tool("bash", { command: "b" }, filler(41_000));
+    const plan = planMaintenance({
+      entries: t.entries(),
+      edited: new Set(),
+      options: DEFAULT_CONFIG,
+      tokens: 75_100,
+      threshold: 70_000,
+    });
+    expect(plan.edits.map((edit) => edit.targetId)).toEqual(
+      expect.arrayContaining([old, output]),
+    );
   });
 
   it("prunes over the threshold when that gets well below it", () => {
@@ -84,15 +113,15 @@ describe("planMaintenance", () => {
   });
 
   it("keeps older reads when supersedeReads is off", () => {
-    const { t } = staleSession();
+    const { t } = staleSessionBeforeCompaction();
     const plan = planMaintenance({
       entries: t.entries(),
       edited: new Set(),
       options: { ...DEFAULT_CONFIG, supersedeReads: false },
-      tokens: 4_100,
-      threshold: 10_000,
+      tokens: 85_100,
+      threshold: 70_000,
     });
-    expect(plan).toEqual({ edits: [], tokens: 4_100 });
+    expect(plan).toEqual({ edits: [], tokens: 85_100 });
   });
 
   it("does not prune when pruning is off", () => {

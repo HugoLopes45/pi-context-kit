@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Replace superseded reads only above the threshold, in one batch with pruning and shaking, and anywhere in the context. Without a compaction, keep edits only when they bring the context to the threshold or below, so they do not repeat at each turn. Every context edit makes the provider miss its cache for the later text, and Anthropic drops every later thinking block. In local sessions, the estimated cache cost of these edits was about 4.8 times the input tokens they saved.
+- Remove the `staleSuffixTokens` setting. A configured value now reports "is not a setting".
+- Cancel obsolete background handoff requests immediately after session-tree navigation.
+- Clarify that recall retrieves text only from the current branch, represents images by MIME type, and does not delete original session entries.
+- Document the Pi development baseline and existing locked/latest-version CI checks.
+
 ## 0.2.1
 
 - Rewrite the README for users who do not know Pi internals: it explains the terms, the sequence of a session, and each setting with its default and an example.

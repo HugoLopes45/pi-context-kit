@@ -4,7 +4,6 @@ import {
   type Edit,
   editableMessage,
   messageTokens,
-  suffixTokens,
   withContent,
 } from "./context.ts";
 import { toolCallsById } from "./tool-calls.ts";
@@ -26,16 +25,13 @@ interface NewerReads {
 /**
  * Replaces read results that a newer read of the same file makes redundant.
  * A newer full read covers every older read; a newer ranged read covers only the same range;
- * a failed read covers only older failed reads. A candidate and its newer messages must fit
- * within `suffixLimit` tokens.
+ * a failed read covers only older failed reads.
  */
 export function supersededReads(
   entries: readonly ProjectedSessionEntry[],
   edited: ReadonlySet<string>,
-  suffixLimit: number,
 ): Edit[] {
   const calls = toolCallsById(entries);
-  const suffix = suffixTokens(entries);
   const newer = new Map<string, NewerReads>();
   const edits: Edit[] = [];
 
@@ -59,11 +55,7 @@ export function supersededReads(
       : seen.fullSuccess ||
         (key.range !== undefined && seen.successRanges.has(key.range));
 
-    if (
-      superseded &&
-      !edited.has(entry.sourceEntry.id) &&
-      (suffix[i] ?? Number.POSITIVE_INFINITY) <= suffixLimit
-    ) {
+    if (superseded && !edited.has(entry.sourceEntry.id)) {
       const content = [{ type: "text" as const, text: SUPERSEDED_NOTICE }];
       if (
         messageTokens(withContent(message, content)) < messageTokens(message)
