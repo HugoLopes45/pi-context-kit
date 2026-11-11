@@ -25,6 +25,9 @@
     "extensions",
     "src"
   ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "pi": {
     "extensions": [
       "./extensions/index.ts"
