@@ -450,7 +450,7 @@ These settings belong to Pi, not to pi-context-kit. Put them in the `compaction`
 
 | Pi setting | Default | Effect on pi-context-kit |
 | --- | --- | --- |
-| `compaction.enabled` | `true` | `false` stops Pi's compaction. Then pi-context-kit changes nothing, because there is no threshold. |
+| `compaction.enabled` | `true` | `false` stops Pi's automatic compaction. Then pi-context-kit changes the context only on `/compact`, because there is no threshold. |
 | `compaction.reserveTokens` | `16384` | Pi's limit is the context window minus this number. pi-context-kit always starts at this limit or before. |
 | `compaction.keepRecentTokens` | `20000` | After a handoff note, approximately this number of the newest tokens stays unchanged. |
 | `compaction.modelOverrides` | none | Changes `reserveTokens` and `keepRecentTokens` for one model. |
@@ -506,7 +506,7 @@ To combine recipes, put all the settings in one `contextKit` block:
 - **Pi still has its own limit.** Pi compacts when the context reaches the context window minus `compaction.reserveTokens` (default 16,384). pi-context-kit can only start earlier, not later. You set Pi's limit with `compaction.reserveTokens` and `compaction.modelOverrides`.
 - **A threshold is not a guarantee.** At the threshold, pi-context-kit tries to make the context smaller. If one tool output is very large, or the summary request fails, the methods can fail. Then Pi compacts at its own limit.
 - **Token counts are estimates.** pi-context-kit uses Pi's estimates. The real count of the provider can be different.
-- **If Pi's compaction is off** (`compaction.enabled: false`), pi-context-kit changes nothing. `thresholdTokens` and `thresholdPercent` are ignored, because pi-context-kit edits the context only at a threshold.
+- **If Pi's compaction is off** (`compaction.enabled: false`), pi-context-kit changes the context only when you run `/compact`. Then it writes a handoff note, as with compaction on. `thresholdTokens` and `thresholdPercent` are ignored, because pi-context-kit edits the context automatically only at a threshold.
 - **Manual compaction and errors.** When you type `/compact`, when the context is too large for the model, or when Pi compacts before a turn, `shake` cannot run. pi-context-kit uses a ready handoff note, or Pi's summary.
 - **`methodOrder` stops at `soft`.** The methods after `soft` do not run.
 - **Subagents** use their own settings. They show no warnings, because they have no screen.
