@@ -803,6 +803,43 @@ describe("pi-context-kit inside Pi", () => {
     ).toBe(true);
   });
 
+  it("does not shake when pruning alone brings the context under the threshold", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage([
+          {
+            type: "text",
+            text: ["```ts", "x = 1;".repeat(2_800), "```"].join("\n"),
+          },
+          fauxToolCall("read", { path: "b.ts" }),
+        ]),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      {
+        thresholdTokens: 8_000,
+        asyncEnabled: false,
+        prune: { protectTokens: 0, minSavings: 1, minTokens: 50 },
+        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      },
+    );
+    await session.prompt("Read b.ts");
+    const replacements = session.sessionManager
+      .getBranch()
+      .flatMap((entry) =>
+        entry.type === "context_edit"
+          ? [JSON.stringify(entry.replacement)]
+          : [],
+      );
+    expect(replacements.some((text) => text.includes("Output pruned"))).toBe(
+      true,
+    );
+    expect(replacements.some((text) => text.includes("Elided block"))).toBe(
+      false,
+    );
+  });
+
   it("does not shake before soft when methodOrder puts soft first", async () => {
     const { session } = await start(
       [
