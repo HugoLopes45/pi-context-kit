@@ -1049,15 +1049,16 @@ describe("pi-context-kit inside Pi", () => {
       },
     );
     await session.prompt("Read b.ts twice");
-    const replacements = session.sessionManager
-      .getBranch()
-      .flatMap((entry) =>
-        entry.type === "context_edit"
-          ? [JSON.stringify(entry.replacement)]
-          : [],
-      );
+    const branch = session.sessionManager.getBranch();
+    const replacements = branch.flatMap((entry) =>
+      entry.type === "context_edit" ? [JSON.stringify(entry.replacement)] : [],
+    );
     expect(replacements).toHaveLength(1);
     expect(replacements[0]).toContain("Superseded by a newer read");
+    expect(branch.filter((entry) => entry.type === "compaction")).toHaveLength(
+      0,
+    );
+    expect(JSON.stringify(session.messages.at(-1))).toContain("done");
   });
 
   it("does not shake before soft when methodOrder puts soft first", async () => {
