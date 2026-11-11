@@ -1,11 +1,6 @@
 import type { ProjectedSessionEntry } from "@earendil-works/pi-coding-agent";
-import {
-  type Edit,
-  editableMessage,
-  messageTokens,
-  withContent,
-} from "./context.ts";
-import { toolCallsById } from "./tool-calls.ts";
+import { type Edit, messageTokens, withContent } from "./context.ts";
+import { newestToolResults, type ToolResult } from "./tool-calls.ts";
 
 export interface PruneOptions {
   /** Newest tool-output tokens that are never pruned. */
@@ -22,39 +17,42 @@ export function pruneToolOutputs(
   edited: ReadonlySet<string>,
   options: PruneOptions,
 ): Edit[] {
-  const calls = toolCallsById(entries);
   const edits: Edit[] = [];
   let seen = 0;
   let savings = 0;
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
-    const message = entry && editableMessage(entry);
-    if (!entry || message?.role !== "toolResult") continue;
-    const tokens = messageTokens(message);
+  for (const result of newestToolResults(entries)) {
+    const tokens = messageTokens(result.message);
     const protectedByWindow = seen < options.protectTokens;
     seen += tokens;
-    const id = entry.sourceEntry.id;
     if (
       protectedByWindow ||
       tokens < options.minTokens ||
-      edited.has(id) ||
-      isSkillFile(calls.get(message.toolCallId)?.arguments)
+      edited.has(result.id) ||
+      isSkillFile(result.args)
     ) {
       continue;
     }
-    const content = [
-      {
-        type: "text" as const,
-        text: `[Output pruned: about ${tokens} tokens. Call recall with entryId "${id}" to read it.]`,
-      },
-    ];
-    const saved = tokens - messageTokens(withContent(message, content));
-    if (saved <= 0) continue;
-    savings += saved;
-    edits.push({ targetId: id, content });
+    const edit = pruneEdit(result, tokens);
+    if (!edit) continue;
+    savings += edit.saved;
+    edits.push(edit.edit);
   }
   return savings >= options.minSavings ? edits.reverse() : [];
+}
+
+function pruneEdit(
+  { id, message }: ToolResult,
+  tokens: number,
+): { edit: Edit; saved: number } | undefined {
+  const content = [
+    {
+      type: "text" as const,
+      text: `[Output pruned: about ${tokens} tokens. Call recall with entryId "${id}" to read it.]`,
+    },
+  ];
+  const saved = tokens - messageTokens(withContent(message, content));
+  return saved > 0 ? { edit: { targetId: id, content }, saved } : undefined;
 }
 
 function isSkillFile(args: Record<string, unknown> | undefined): boolean {

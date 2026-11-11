@@ -511,6 +511,173 @@ describe("pi-context-kit inside Pi", () => {
     expect(JSON.stringify(session.messages.at(-1))).toContain("done");
   });
 
+  it("does not retry a failed note when Pi compacts at its own threshold", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    const reply: FauxResponseStep = (context) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note")) {
+        notes++;
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "note failed",
+        });
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), 15_000, true, {
+      asyncEnabled: false,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt(`Read b.ts. ${"history ".repeat(4_500)}`);
+    const compactions = session.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(notes).toBe(1);
+    expect(compactions).toHaveLength(1);
+    expect(compactions[0]?.fromHook).toBe(false);
+  });
+
+  it("compacts in the turn that passes an early threshold without a note in progress", async () => {
+    const main = [
+      ...Array.from({ length: 3 }, () =>
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      ),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    const requests: string[] = [];
+    const reply: FauxResponseStep = (context) => {
+      if (JSON.stringify(context.messages.at(-1)).includes("handoff note")) {
+        notes++;
+        return fauxAssistantMessage("## Goal\nContinue the inspection");
+      }
+      requests.push(JSON.stringify(context.messages));
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), 200_000, true, {
+      thresholdTokens: 13_000,
+      asyncEnabled: true,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt("Read b.ts three times");
+    expect(notes).toBe(1);
+    expect(
+      session.sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toHaveLength(1);
+    expect(requests.at(-1)).toContain("Continue the inspection");
+  });
+
+  it("cancels an unfinished note when /compact asks for a focus", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    let noteSignal: AbortSignal | undefined;
+    let abortedBeforeFocus: boolean | undefined;
+    const reply: FauxResponseStep = (context, options) => {
+      if (JSON.stringify(context.messages.at(-1)).includes("handoff note")) {
+        notes++;
+        if (notes > 1) {
+          abortedBeforeFocus = noteSignal?.aborted;
+          return fauxAssistantMessage("## Goal\nFocused note");
+        }
+        const signal = options?.signal;
+        if (!signal) throw new Error("missing note cancellation signal");
+        noteSignal = signal;
+        return new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+            { once: true },
+          );
+        });
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(12).fill(reply), 200_000, true, {
+      thresholdTokens: 12_000,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    await session.prompt("Read b.ts twice, then a.ts");
+    expect(noteSignal?.aborted).toBe(false);
+    const result = await session.compact("the next step");
+    expect(abortedBeforeFocus).toBe(true);
+    expect(notes).toBe(2);
+    expect(result.summary).toContain("Focused note");
+  });
+
+  it("waits for an unfinished note at an early threshold instead of compacting", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    let summaries = 0;
+    let noteSignal: AbortSignal | undefined;
+    const reply: FauxResponseStep = (context, options) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note")) {
+        notes++;
+        const signal = options?.signal;
+        if (!signal) throw new Error("missing note cancellation signal");
+        noteSignal = signal;
+        return new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+            { once: true },
+          );
+        });
+      }
+      if (last.includes("<conversation>")) {
+        summaries++;
+        return fauxAssistantMessage("## Goal\nPi summary");
+      }
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(12).fill(reply), 200_000, true, {
+      thresholdTokens: 12_000,
+      supersedeReads: false,
+      prune: { enabled: false },
+    });
+    try {
+      await session.prompt("Read b.ts twice, then a.ts");
+      expect(notes).toBe(1);
+      expect(noteSignal?.aborted).toBe(false);
+      expect(summaries).toBe(0);
+      expect(
+        session.sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "compaction"),
+      ).toHaveLength(0);
+      expect(JSON.stringify(session.messages.at(-1))).toContain("done");
+    } finally {
+      await session.reload();
+    }
+  });
+
   it.each([
     ["soft is not in methodOrder", 200_000, ["handoff", "shake"]],
     ["the threshold equals Pi's", 14_000, ["soft"]],
