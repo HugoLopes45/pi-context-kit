@@ -1,6 +1,6 @@
 # pi-context-kit
 
-Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). Keep long Pi sessions small without losing the original text: pi-context-kit removes old file copies and old tool outputs from the model's context, prepares the summary before Pi needs it, and lets the model read the original text again.
+Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). It keeps the context of long Pi sessions small: pi-context-kit removes old file copies and old tool outputs from the model's context, and prepares the summary before Pi needs it. The session keeps the original text, and the model can read it again with `recall`.
 
 ```sh
 pi install npm:pi-context-kit
@@ -14,12 +14,12 @@ Restart Pi after the install. The defaults work without configuration. Requireme
 | --- | --- | --- |
 | The model reads the same file again | Both copies stay in the context. | The old copy is replaced, above the threshold. |
 | Old tool outputs fill the context | They stay until Pi summarizes. | They are replaced with a short notice. No model request. |
-| The context reaches the limit | Pi writes a summary. | A handoff note is often ready, because it was written in the background. |
+| The context reaches the limit | Pi writes a summary. | A handoff note can be ready, because it was written in the background. |
 | The model needs a removed detail | The summary is all that remains in the context. | The model calls `recall` to read the original text. |
 
 The original session entries never change. Only the context that Pi sends to the model becomes smaller.
 
-This extension is for Pi users with long sessions: many file reads, long command outputs, or many compactions. In a short session, the context rarely reaches the threshold. Then the context does not change, and only `recall` is added.
+This extension is for Pi users with long sessions: many file reads, long command outputs, or many compactions. In a short session, the context rarely reaches the threshold. Then the context does not change at the end of a turn. A background handoff note can still start near the threshold, and `/compact` uses a handoff note instead of Pi's summary.
 
 ## The problem
 
@@ -350,7 +350,7 @@ Example: try shaking first, because it does not call the model.
 
 Prepares the handoff note in the background, before the threshold.
 
-- `true` (default): the note starts one eighth of the threshold early, with a maximum of 32,000 tokens. At the threshold, the note is often ready, so compaction is fast.
+- `true` (default): the note starts one eighth of the threshold early, with a maximum of 32,000 tokens. If the note is ready at the threshold, compaction is fast.
 - `false`: no background note. At the threshold, pi-context-kit writes a new note. Your work waits for this note.
 
 This setting has an effect only if `"handoff"` is in `methodOrder` before `"soft"`.
