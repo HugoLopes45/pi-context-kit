@@ -4,7 +4,7 @@
 
 **Long Pi sessions that stay sharp.**
 
-Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). pi-context-kit clears stale file reads and old tool outputs out of the context window, writes the handoff summary in the background before Pi needs it, and keeps every original line of text one `recall` away.
+Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). pi-context-kit clears stale file reads and old tool outputs out of the context window, writes the handoff summary in the background before Pi needs it, and keeps the original text of the current branch one `recall` search away.
 
 ```sh
 pi install npm:pi-context-kit
@@ -14,8 +14,8 @@ Restart Pi. That is all: the defaults work without configuration. Requirements: 
 
 ## Why pi-context-kit
 
-- **A cleaner context window.** Old copies of files and old command outputs leave the model's context. The model works with what is current.
-- **Summaries written ahead of time.** The session model writes the handoff note in the background, while it continues to work. When the note is ready at the threshold, compaction does not wait for a new summary.
+- **A cleaner context window.** Above the threshold, old copies of files and old tool outputs become one-line notices. The newest tool outputs stay.
+- **Summaries written ahead of time.** The session model writes the handoff note in the background, while it continues to work. When a ready note still fits at the threshold, compaction does not wait for a new summary.
 - **Nothing is deleted.** The session keeps the original text. The model searches and reads it again with the `recall` tool.
 - **Free where possible.** Replacing old reads, pruning and shaking do not call the model.
 - **Cache-friendly.** Context edits happen only above the threshold, in one batch. The provider's prompt cache breaks once per maintenance step, not at each turn.
@@ -23,7 +23,7 @@ Restart Pi. That is all: the defaults work without configuration. Requirements: 
 
 ## What the model sees
 
-Above the threshold, large old content becomes a one-line notice. The full text stays in the session. Example (the sizes and IDs are illustrative):
+Above the threshold, large old content becomes a one-line notice. The full text stays in the session. Example (the sizes and IDs are illustrative; the last notice appears only when shaking runs, see [`methodOrder`](#methodorder)):
 
 ```diff
 - <first read of src/app.ts, about 5,000 tokens>
@@ -36,7 +36,7 @@ Above the threshold, large old content becomes a one-line notice. The full text 
 + [Elided block: about 2000 tokens. Call recall with entryId "e5f6a7b8" to read it.]
 ```
 
-Your messages and the model's tool calls stay in the context. The model's reasoning also stays, with one exception for Anthropic. See [What maintenance preserves](#what-maintenance-preserves).
+These notices never change your messages or the model's tool calls. The model's reasoning also stays, with one exception for Anthropic. Compaction still replaces older messages with a summary. See [What maintenance preserves](#what-maintenance-preserves).
 
 ## Pi alone, and Pi with pi-context-kit
 
@@ -49,11 +49,11 @@ Your messages and the model's tool calls stay in the context. The model's reason
 
 The original session entries never change. Only the context that Pi sends to the model becomes smaller.
 
-pi-context-kit is for long Pi sessions: many file reads, long command outputs, or many compactions. In a short session, the context rarely reaches the threshold. Then the context does not change at the end of a turn. A background handoff note can still start near the threshold, and `/compact` uses a handoff note instead of Pi's summary.
+pi-context-kit is for long Pi sessions: many file reads, long command outputs, or many compactions. In a short session, the context rarely reaches the threshold. Then the context does not change at the end of a turn. A background handoff note can still start near the threshold, and `/compact` tries a handoff note first, with Pi's summary as the fallback.
 
 ## Why long Pi sessions need context management
 
-An AI model can read only a limited amount of text at one time. This limit is the **context window**. Text is measured in **tokens**. One token is approximately 3 to 4 characters of English text.
+An AI model can read only a limited amount of text at one time. This limit is the **context window**. Text is measured in **tokens**. Pi counts approximately 4 characters as one token.
 
 In a long session, the conversation fills the context window. File reads and command outputs are usually the largest parts. When the window is almost full, Pi does a **compaction**: it replaces the old conversation with a summary. A summary can lose details, and it costs time and money.
 
@@ -120,24 +120,21 @@ To use a setting only in one project, put the same block in the file `.pi/settin
  Every turn ends
        |
        v
- 1. Remove old file reads that a newer read replaced
-       |
-       v
- Context near the threshold? --yes--> 2. Start a handoff note in the background
+ Context near the threshold? --yes--> Start a handoff note in the background
        |
        v
  Context above the threshold? --no--> continue to work
        |
       yes
        v
- 3. Prune old tool outputs
+ Replace old file reads, and prune old tool outputs
        |
        v
  Small enough now? --yes--> continue to work
        |
        no
        v
- 4. Try each method in "methodOrder": handoff, shake, soft
+ Try each method in "methodOrder": handoff, shake, soft
 ```
 
 ### 1. Old file reads are replaced
