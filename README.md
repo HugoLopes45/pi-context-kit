@@ -1,8 +1,25 @@
 # pi-context-kit
 
-pi-context-kit keeps long [Pi](https://github.com/earendil-works/pi) sessions small, so the AI model can continue to work.
-Install it once. The defaults work without configuration.
-Summaries can lose details. `recall` retrieves earlier text on the current branch, but returns only MIME types for images.
+Keep long [Pi](https://github.com/earendil-works/pi) sessions small without losing the original text. pi-context-kit removes old file copies and old tool outputs from the model's context, prepares the summary before Pi needs it, and lets the model read the original text again.
+
+```sh
+pi install npm:pi-context-kit
+```
+
+Restart Pi after the install. The defaults work without configuration. Requirements: Pi 1.0.3 or later, Node.js 22.19 or later.
+
+## Pi alone, and Pi with pi-context-kit
+
+| In a long session | Pi alone | With pi-context-kit |
+| --- | --- | --- |
+| The model reads the same file again | Both copies stay in the context. | The old copy is replaced, above the threshold. |
+| Old tool outputs fill the context | They stay until Pi summarizes. | They are replaced with a short notice. No model request. |
+| The context reaches the limit | Pi writes a summary. | A handoff note is often ready, because it was written in the background. |
+| The model needs a removed detail | The summary is all that remains in the context. | The model calls `recall` to read the original text. |
+
+The original session entries never change. Only the context that Pi sends to the model becomes smaller.
+
+This extension is for Pi users with long sessions: many file reads, long command outputs, or many compactions. In a short session, the context rarely reaches the threshold. Then the context does not change, and only `recall` is added.
 
 ## The problem
 
@@ -45,6 +62,8 @@ pi-context-kit does three things:
 3. Restart Pi.
 
 To check the installation, type `pi list`. The list must show `npm:pi-context-kit`.
+
+To update, type `pi update npm:pi-context-kit` and restart Pi.
 
 To remove it, type `pi remove npm:pi-context-kit` and restart Pi.
 
