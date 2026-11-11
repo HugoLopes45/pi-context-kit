@@ -139,6 +139,25 @@ describe("pi-context-kit inside Pi", () => {
     ).toContain("[Superseded by a newer read of this file]");
   });
 
+  it("takes thresholdPercent as a share of the context window", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      { thresholdPercent: 4, methodOrder: [] },
+    );
+    await session.prompt("Read b.ts twice");
+    expect(
+      session.sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "context_edit"),
+    ).toHaveLength(1);
+  });
+
   // An edit without compaction costs the provider cache again at each turn above the threshold.
   it("keeps an older read above the threshold when nothing compacts", async () => {
     const { session } = await start(
@@ -1200,5 +1219,52 @@ describe("pi-context-kit inside Pi", () => {
     expect(JSON.stringify(result)).toContain(
       `${entry.id} user: Remember RECALL-MARKER`,
     );
+  });
+
+  it("leaves an overflow without a ready note to Pi's summary", async () => {
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "a.ts" })),
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "prompt is too long: 300000 tokens > 200000 maximum",
+      }),
+      fauxAssistantMessage("done"),
+    ];
+    let notes = 0;
+    const reply: FauxResponseStep = (context) => {
+      const last = JSON.stringify(context.messages.at(-1));
+      if (last.includes("handoff note")) {
+        notes++;
+        return fauxAssistantMessage("## Goal\nNote");
+      }
+      if (last.includes("<conversation>"))
+        return fauxAssistantMessage("## Goal\nPi summary");
+      const next = main.shift();
+      if (!next) throw new Error("unexpected request");
+      return next;
+    };
+    const { session } = await start(Array(8).fill(reply), 200_000, true, {
+      asyncEnabled: false,
+    });
+    await session.prompt("Read a.ts");
+    const compactions = session.sessionManager
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(notes).toBe(0);
+    expect(compactions).toHaveLength(1);
+    expect(compactions[0]?.fromHook).toBe(false);
+  });
+
+  it("returns an error to the model when recall gets no query or entryId", async () => {
+    const { session } = await start([
+      fauxAssistantMessage(fauxToolCall("recall", {})),
+      fauxAssistantMessage("done"),
+    ]);
+    await session.prompt("Recall something");
+    const result = session.messages.find(
+      (message) => message.role === "toolResult",
+    );
+    expect(result?.role === "toolResult" && result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("Pass query or entryId.");
   });
 });
