@@ -139,24 +139,30 @@ describe("pi-context-kit inside Pi", () => {
     ).toContain("[Superseded by a newer read of this file]");
   });
 
-  it("takes thresholdPercent as a share of the context window", async () => {
-    const { session } = await start(
-      [
-        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
-        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
-        fauxAssistantMessage("done"),
-      ],
-      200_000,
-      true,
-      { thresholdPercent: 4, methodOrder: [] },
-    );
-    await session.prompt("Read b.ts twice");
-    expect(
-      session.sessionManager
-        .getBranch()
-        .filter((entry) => entry.type === "context_edit"),
-    ).toHaveLength(1);
-  });
+  it.each([
+    [4, 1],
+    [10, 0],
+  ])(
+    "takes thresholdPercent %i as a share of the context window",
+    async (thresholdPercent, edits) => {
+      const { session } = await start(
+        [
+          fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+          fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+          fauxAssistantMessage("done"),
+        ],
+        200_000,
+        true,
+        { thresholdPercent, methodOrder: [] },
+      );
+      await session.prompt("Read b.ts twice");
+      expect(
+        session.sessionManager
+          .getBranch()
+          .filter((entry) => entry.type === "context_edit"),
+      ).toHaveLength(edits);
+    },
+  );
 
   // An edit without compaction costs the provider cache again at each turn above the threshold.
   it("keeps an older read above the threshold when nothing compacts", async () => {
