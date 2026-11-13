@@ -1,5 +1,7 @@
 # Contributing
 
+English | [简体中文](CONTRIBUTING.zh-CN.md)
+
 Small, focused contributions are welcome. Discuss large behavior changes in an issue before implementing them.
 
 ## Local checks
@@ -31,6 +33,7 @@ Do not load another copy of this extension in the same session.
 - Prefer existing Pi APIs and small changes over new dependencies or abstractions.
 - Add a regression test for a bug and check that it fails before the fix.
 - Do not weaken tests or input validation to pass checks.
+- Update the English and the Simplified Chinese version of a document in the same pull request.
 - Give the pull request a title that describes the user-visible change. Release notes are generated from these titles.
 - Never include credentials, account data, or private conversation content in commits, screenshots, or logs.
 
@@ -51,7 +54,7 @@ Do not bump the package version in pull requests. The release tag sets the publi
 
 ### Release procedure
 
-1. In a pull request, add a `## [X.Y.Z] - YYYY-MM-DD` entry at the top of `CHANGELOG.md`, in words a user understands. Choose `patch` for fixes, `minor` for compatible features, or `major` for breaking changes. Pi shows this entry to users after `pi update`.
+1. In a pull request, add a `## [X.Y.Z] - YYYY-MM-DD` entry at the top of `CHANGELOG.md`, in words a user understands. Choose `patch` for fixes, `minor` for compatible features, or `major` for breaking changes. Pi shows this entry to users after `pi update`. Write `CHANGELOG.md` in English only, because Pi reads only this file.
 2. Wait for CI to succeed on the `main` commit you want to publish.
 3. On GitHub, open **Releases > Draft a new release**.
 4. Create the tag `vX.Y.Z` on `main`.
