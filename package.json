@@ -1,7 +1,7 @@
 {
   "name": "pi-context-kit",
   "version": "0.2.1",
-  "description": "Pi compaction and context management for the Pi coding agent: replace stale file reads, prune old tool outputs, prepare handoff notes in the background, and recall the original text.",
+  "description": "Keep long Pi coding agent sessions sharp. Clears old file reads and tool outputs from the context, writes the compaction summary in the background, and lets the agent recall the original text.",
   "type": "module",
   "license": "MIT",
   "author": "HugoLopes45 (https://github.com/HugoLopes45)",
@@ -30,7 +30,8 @@
   "files": [
     "extensions",
     "src",
-    "context-kit.schema.json"
+    "context-kit.schema.json",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22.19.0"
@@ -43,8 +44,7 @@
   "scripts": {
     "check": "tsc --noEmit && npm run lint && vitest --run",
     "lint": "node scripts/lint.ts",
-    "test": "vitest --run",
-    "prepublishOnly": "test -n \"$GITHUB_ACTIONS\" || test \"$(npm whoami)\" = hugolopes45 || { echo 'Publish only as the npm user hugolopes45.' >&2; exit 1; }; npm run check"
+    "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

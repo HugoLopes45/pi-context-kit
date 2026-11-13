@@ -1,8 +1,10 @@
-# pi-context-kit
+# pi-context-kit: long Pi sessions that stay sharp
 
-[![npm version](https://img.shields.io/npm/v/pi-context-kit)](https://www.npmjs.com/package/pi-context-kit) [![CI](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml) [![Node.js](https://img.shields.io/node/v/pi-context-kit)](https://nodejs.org) [![License: MIT](https://img.shields.io/npm/l/pi-context-kit)](LICENSE)
-
-**Long Pi sessions that stay sharp.**
+[![CI](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/pi-context-kit)](https://www.npmjs.com/package/pi-context-kit)
+[![Pi package](https://img.shields.io/badge/pi.dev-package-blue)](https://pi.dev/packages/pi-context-kit)
+[![Node.js](https://img.shields.io/node/v/pi-context-kit)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/npm/l/pi-context-kit)](LICENSE)
 
 Pi compaction and context management for the [Pi coding agent](https://github.com/earendil-works/pi). pi-context-kit clears stale file reads and old tool outputs out of the context window, writes the handoff summary in the background before Pi needs it, and keeps the original text of the current branch one `recall` search away.
 
@@ -10,7 +12,7 @@ Pi compaction and context management for the [Pi coding agent](https://github.co
 pi install npm:pi-context-kit
 ```
 
-Restart Pi. That is all: the defaults work without configuration. Requirements: Pi 1.0.3 or later, Node.js 22.19 or later.
+Restart Pi. The defaults work without configuration.
 
 ## Why pi-context-kit
 
@@ -75,22 +77,24 @@ In a long session, the conversation fills the context window. File reads and com
 
 </details>
 
-## Install
+## Quick start
 
-1. Open a terminal.
-2. Type this command and press Enter:
+You need Pi 1.0.3 or later and Node.js 22.19 or later.
 
-   ```sh
-   pi install npm:pi-context-kit
-   ```
+1. Install the package with the command above.
+2. Restart Pi.
+3. Look at the footer. It shows `Context 0% · cleanup at 75%` when the extension is active.
+4. Work as usual. Type `/context-kit` to change the settings.
 
-3. Restart Pi.
+## Update, try or remove
 
-To check the installation, type `pi list`. The list must show `npm:pi-context-kit`.
+```sh
+pi update npm:pi-context-kit    # update, then restart Pi
+pi -e npm:pi-context-kit        # try for one session without installing
+pi remove npm:pi-context-kit    # remove, then restart Pi
+```
 
-To update, type `pi update npm:pi-context-kit` and restart Pi.
-
-To remove it, type `pi remove npm:pi-context-kit` and restart Pi.
+After an update, Pi shows what changed, from [CHANGELOG.md](CHANGELOG.md).
 
 ## Use it
 
@@ -328,6 +332,18 @@ pi-context-kit has no setting per model. To start earlier for one model only, ma
 - **Manual compaction and errors.** When you type `/compact`, when the context is too large for the model, or when Pi compacts before a turn, `shake` cannot run. pi-context-kit uses a ready handoff note, or Pi's summary.
 - **The method order stops at `soft`.** The methods after `soft` do not run.
 - **Subagents** read the same settings files. They show no warnings and no status, because they have no screen.
+
+## Troubleshooting
+
+**No `Context` in the footer**: type `pi list` and check that it shows `npm:pi-context-kit`. Then restart Pi. Pi shows the footer only in the interactive mode.
+
+**`pi-context-kit settings need attention`**: a value in a settings file is not valid. pi-context-kit uses the default for that value. Type `/context-kit` to see the problem, then correct the file or select a new value in the panel.
+
+**`pi-context-kit moved its settings to ...`**: an earlier version kept the settings in Pi's `settings.json`. pi-context-kit copied them to its own file once. You can remove the `contextKit` entry from `settings.json`.
+
+**`pi-context-kit: handoff note failed`**: the summary request failed. pi-context-kit uses the next method or Pi's summary, so your session continues. Check the model and your provider limits.
+
+**The panel cannot save a value**: Pi shows `pi-context-kit:` and the file error. Check that you can write the settings file, then select the value again.
 
 ## FAQ
 
