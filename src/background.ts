@@ -18,11 +18,19 @@ interface Job {
   controller: AbortController;
   note: Promise<Note | undefined>;
   settled: boolean;
+  /** Whether the job settled with a note. */
+  ready: boolean;
 }
 
 /** One speculative handoff note per compaction epoch, written while the agent keeps working. */
 export class BackgroundHandoff {
   #job: Job | undefined;
+  readonly #onSettle: () => void;
+
+  /** `onSettle` runs when the current job finishes, with or without a note. */
+  constructor(onSettle: () => void = () => {}) {
+    this.#onSettle = onSettle;
+  }
 
   /** Starts a job unless one already ran in this epoch. */
   start(
@@ -39,10 +47,23 @@ export class BackgroundHandoff {
         if (!controller.signal.aborted) onError(error);
         return undefined;
       })
-      .finally(() => {
+      .then((result) => {
         job.settled = true;
+        job.ready = result !== undefined;
+        return result;
       });
-    const job: Job = { epoch, leafId, controller, note, settled: false };
+    // Apart from `note`, so the listener cannot fail the note. The listener must not throw.
+    void note.then(() => {
+      if (this.#job === job) this.#onSettle();
+    });
+    const job: Job = {
+      epoch,
+      leafId,
+      controller,
+      note,
+      settled: false,
+      ready: false,
+    };
     this.#job = job;
     return true;
   }
@@ -50,6 +71,14 @@ export class BackgroundHandoff {
   /** Whether the note of this epoch is still being written. */
   writing(epoch: string | null): boolean {
     return this.#job?.epoch === epoch && !this.#job.settled;
+  }
+
+  /** The background note of this epoch, for the status line. */
+  noteState(epoch: string | null): "writing" | "ready" | undefined {
+    const job = this.#job;
+    if (job?.epoch !== epoch) return undefined;
+    if (!job.settled) return "writing";
+    return job.ready ? "ready" : undefined;
   }
 
   /** Returns a finished note only when it still covers a prefix of the branch. */

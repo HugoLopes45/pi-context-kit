@@ -19,11 +19,12 @@ Restart Pi. That is all: the defaults work without configuration. Requirements: 
 - **Nothing is deleted.** The session keeps the original text. The model searches and reads it again with the `recall` tool.
 - **Free where possible.** Replacing old reads, pruning and shaking do not call the model.
 - **Cache-friendly.** Context edits happen only above the threshold, in one batch. The provider's prompt cache breaks once per maintenance step, not at each turn.
-- **Zero setup.** Install, restart, work. Tune it later if you want.
+- **Zero setup.** Install, restart, work. By default, maintenance starts at 75% of the context window, which for most models is before Pi's own limit.
+- **Visible.** The footer shows how full the context is and when cleanup starts. A notice tells you what was freed. Type `/context-kit` to change the main settings in a panel, without editing a file.
 
 ## What the model sees
 
-Above the threshold, large old content becomes a one-line notice. The full text stays in the session. Example (the sizes and IDs are illustrative; the last notice appears only when shaking runs, see [`methodOrder`](#methodorder)):
+Above the threshold, large old content becomes a one-line notice. The full text stays in the session. Example (the sizes and IDs are illustrative; the last notice appears only when shaking runs, see [`strategy`](#main-settings)):
 
 ```diff
 - <first read of src/app.ts, about 5,000 tokens>
@@ -91,28 +92,30 @@ To update, type `pi update npm:pi-context-kit` and restart Pi.
 
 To remove it, type `pi remove npm:pi-context-kit` and restart Pi.
 
-## Recommended setup
+## Use it
 
-The default setup works without changes. By default, maintenance starts at the same time as Pi's compaction.
-For large context windows, start maintenance earlier. This example starts at 150,000 tokens:
+You do not need to configure anything. pi-context-kit shows its state in Pi's footer:
 
-1. Open the file `~/.pi/agent/settings.json` in a text editor. `~` is your home folder.
-2. Add the `contextKit` block inside the outer `{ }`. Put a comma between this block and the other settings.
+| Footer | Meaning |
+| --- | --- |
+| `Context 62% · cleanup at 75%` | The context is 62% full. Cleanup starts at 75%. |
+| `Context 70% · cleanup at 75% · writing summary` | A handoff note is being written in the background. `summary ready` means that it is ready. |
+| `Context 25% · no automatic cleanup` | Pi's automatic compaction is off, so cleanup runs only when you type `/compact`. |
+| `Context cleanup off` | You turned automatic cleanup off. |
 
-   ```json
-   {
-     "contextKit": {
-       "thresholdTokens": 150000
-     }
-   }
-   ```
+After pi-context-kit shortens old outputs, Pi shows a notice, for example: `pi-context-kit freed 17% of the context (34k tokens). The agent can still look up what was removed.`
 
-3. Save the file.
-4. In Pi, type `/reload`, or restart Pi.
+To change the settings, type `/context-kit` and press Enter. Select a line with the arrow keys and press Enter to change its value. The change is saved at once and applies from the next turn. Press Escape to close the panel.
 
-If a value is incorrect, Pi shows a warning that starts with `pi-context-kit: invalid settings`. The incorrect value is ignored and its default is used.
+| Panel line | Choices | Setting in the file |
+| --- | --- | --- |
+| Automatic cleanup | On, Off | `enabled` |
+| Clean up when the context is | 50% to 90% full, At Pi's limit | `threshold` |
+| Cleanup method | Summary notes (recommended), Trim first, Pi's summary | `strategy`: `"balanced"`, `"frugal"`, `"pi-summary"` |
 
-To use a setting only in one project, put the same block in the file `.pi/settings.json` in that project folder. Project settings replace global settings.
+The panel does not show the Cleanup method line when `advanced.methodOrder` is in the file, because that setting replaces the method.
+
+Outside the interactive mode, `/context-kit` shows the current settings in one line.
 
 ## How it works during a session
 
@@ -134,7 +137,7 @@ To use a setting only in one project, put the same block in the file `.pi/settin
        |
        no
        v
- Try each method in "methodOrder": handoff, shake, soft
+ Try each method of the strategy, for example: handoff, shake, soft
 ```
 
 ### 1. Old file reads are replaced
@@ -161,7 +164,7 @@ The newest 40,000 tokens of tool outputs always stay. pi-context-kit keeps this 
 
 ### 4. Other methods, in order
 
-If pruning is not sufficient, pi-context-kit tries the methods in `methodOrder`, one after the other:
+If pruning is not sufficient, pi-context-kit tries the methods of the [strategy](#main-settings), one after the other:
 
 | Method | What it does | Uses the model? |
 | --- | --- | --- |
@@ -195,298 +198,105 @@ Compaction is different: it replaces older context with a summary, including old
 
 ## Settings
 
-This section lists every setting. Each setting has its allowed values, its default, and an example.
+This section is for users who edit the settings file. The panel changes the three main settings; the file also has the advanced settings.
 
-### Where to put the settings
-
-Put all settings in a `contextKit` block, in one of these files:
+### The settings files
 
 | File | Applies to |
 | --- | --- |
-| `~/.pi/agent/settings.json` | All your projects. `~` is your home folder. |
-| `.pi/settings.json` in a project folder | Only this project. These values replace the values of the global file. |
+| `~/.pi/agent/context-kit.json` | All your projects. `~` is your home folder. |
+| `.pi/context-kit.json` in a project folder | Only this project, and only when you trust the project in Pi. Its values replace the values of the global file. |
 
-You do not need to set all settings. A missing setting uses its default.
-After a change, type `/reload` in Pi, or restart Pi.
+You do not need to set all settings. A missing setting uses its default. pi-context-kit reads the files again at each turn, so you do not need to restart Pi. The panel writes to the project file when that file sets the setting, otherwise to the global file.
 
-### All settings with their defaults
-
-This block sets every setting to its default. It has the same effect as no `contextKit` block.
-Copy only the lines that you want to change.
+Add the `$schema` line to get completion and checks in editors such as VS Code:
 
 ```json
 {
-  "contextKit": {
-    "enabled": true,
-    "thresholdTokens": -1,
-    "thresholdPercent": -1,
+  "$schema": "https://unpkg.com/pi-context-kit/context-kit.schema.json",
+  "threshold": "70%",
+  "strategy": "frugal"
+}
+```
+
+### Main settings
+
+| Setting | Allowed values | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `true`, `false` | `true` | `false` stops all maintenance and handoff notes. The `recall` tool stays available. |
+| `threshold` | A whole number of tokens, a percentage such as `"75%"`, or `"pi"` | `"75%"` | Where maintenance starts. |
+| `strategy` | `"balanced"`, `"frugal"`, `"pi-summary"` | `"balanced"` | What pi-context-kit does when pruning is not sufficient. |
+
+**`threshold`.** A percentage applies to each model's context window, so `"75%"` is 150,000 tokens with a 200,000-token window and 750,000 tokens with a 1,000,000-token window. Decimals are allowed, for example `"72.5%"`. A number such as `150000` is the same for all models. Do not put spaces, dots or commas in a number of tokens. `"pi"` waits for Pi's own limit. pi-context-kit can start before Pi's limit, never after: if your value is larger, Pi's limit is used. See [Pi settings that also apply](#pi-settings-that-also-apply).
+
+**`strategy`.**
+
+| Strategy (panel name) | Above the threshold, after pruning | Background requests |
+| --- | --- | --- |
+| `"balanced"` (Summary notes) | A handoff note. If the note fails, shake. Then Pi's summary. | Yes: the note is written before the threshold. |
+| `"frugal"` (Trim first) | Shake, because it does not call the model. If that is not sufficient, a handoff note. Then Pi's summary. | No |
+| `"pi-summary"` (Pi's summary) | Pi's summary. No handoff note, no shaking. | No |
+
+### Advanced settings
+
+Put these settings in an `advanced` block. Most users never need them.
+
+```json
+{
+  "advanced": {
     "methodOrder": ["handoff", "shake", "soft"],
-    "asyncEnabled": true,
+    "background": true,
     "supersedeReads": true,
     "progressRatio": 0.8,
-    "prune": {
-      "enabled": true,
-      "protectTokens": 40000,
-      "minSavings": 20000,
-      "minTokens": 50
-    },
-    "shake": {
-      "protectTokens": 16000,
-      "minSavings": 4000,
-      "blockMinTokens": 400
-    }
+    "prune": { "enabled": true, "protectTokens": 40000, "minSavings": 20000, "minTokens": 50 },
+    "shake": { "protectTokens": 16000, "minSavings": 4000, "blockMinTokens": 400 }
   }
 }
 ```
 
-### Summary table
-
-| Setting | Allowed values | Default | Short description |
-| --- | --- | --- | --- |
-| [`enabled`](#enabled) | `true`, `false` | `true` | Turns all maintenance on or off. |
-| [`thresholdTokens`](#thresholdtokens) | `-1`, or a whole number above 0 | `-1` | Starts maintenance at this number of tokens. |
-| [`thresholdPercent`](#thresholdpercent) | `-1`, or a number above 0, up to 100 | `-1` | Starts maintenance at this percentage of the context window. |
-| [`methodOrder`](#methodorder) | A list of `"handoff"`, `"shake"`, `"soft"` | `["handoff", "shake", "soft"]` | The methods to try, and their order. |
-| [`asyncEnabled`](#asyncenabled) | `true`, `false` | `true` | Prepares the handoff note in the background. |
-| [`supersedeReads`](#supersedereads) | `true`, `false` | `true` | Replaces old copies of a file that was read again. |
-| [`progressRatio`](#progressratio) | A number above 0, up to 1 | `0.8` | How small the context must become. |
-| [`prune.enabled`](#pruneenabled) | `true`, `false` | `true` | Turns pruning of old tool outputs on or off. |
-| [`prune.protectTokens`](#pruneprotecttokens) | A whole number, 0 or more | `40000` | The newest tool outputs that are never pruned. |
-| [`prune.minSavings`](#pruneminsavings) | A whole number, 0 or more | `20000` | The minimum gain for pruning. |
-| [`prune.minTokens`](#prunemintokens) | A whole number, 0 or more | `50` | Tool outputs smaller than this are never pruned. |
-| [`shake.protectTokens`](#shakeprotecttokens) | A whole number, 0 or more | `16000` | The newest context that is never shaken. |
-| [`shake.minSavings`](#shakeminsavings) | A whole number, 0 or more | `4000` | The minimum gain for shaking. |
-| [`shake.blockMinTokens`](#shakeblockmintokens) | A whole number, 0 or more | `400` | Blocks smaller than this are never shaken. |
-
-"Whole number" means a number without decimals, for example `150000`. Do not put spaces, dots, or commas in numbers: write `150000`, not `150,000`.
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `methodOrder` | From `strategy` | Replaces the method order of the strategy. Allowed values: `"handoff"`, `"shake"`, `"soft"`. Methods after `"soft"` never run. Without `"handoff"` before `"soft"`, no handoff note is written, also on `/compact`. An empty list `[]` only replaces old reads and prunes. |
+| `background` | From `strategy` | `true` writes the handoff note in the background, one eighth of the threshold early (maximum 32,000 tokens). `false` writes it at the threshold, and your work waits for it. |
+| `supersedeReads` | `true` | Replaces the old copy of a file that the model read again. |
+| `progressRatio` | `0.8` | Each method must bring the context to this fraction of the threshold, otherwise its result is not used and the next method runs. Above 0, up to 1. |
+| `prune.enabled` | `true` | `false` never prunes tool outputs. |
+| `prune.protectTokens` | `40000` | The newest tool outputs, up to this number of tokens, are never pruned. |
+| `prune.minSavings` | `20000` | Pruning occurs only if it removes at least this number of tokens. |
+| `prune.minTokens` | `50` | Tool outputs smaller than this are never pruned. |
+| `shake.protectTokens` | `16000` | The newest context, up to this number of tokens, is never shaken. Your own messages are never shaken. |
+| `shake.minSavings` | `4000` | Shaking occurs only if it removes at least this number of tokens. |
+| `shake.blockMinTokens` | `400` | Code and XML blocks smaller than this are never shaken. |
 
 ### When a setting is incorrect
 
-pi-context-kit checks each value. If a value is incorrect, Pi shows a warning, and the setting uses its default. The other settings still apply.
-
-Example: with `"thresholdTokens": "150000"` (a text in quotes, not a number), Pi shows:
+pi-context-kit checks each value. If a value is incorrect, Pi shows a warning and the setting uses its default. The other settings still apply. Example: with `"threshold": "150000"` (a text in quotes, not a number), Pi shows:
 
 ```text
-pi-context-kit: invalid settings, defaults used (contextKit.thresholdTokens must be -1 or a positive integer).
+pi-context-kit settings need attention: threshold must be a positive integer (tokens), a percentage such as "75%", or "pi" (default used). Type /context-kit to see them.
 ```
 
-A setting name with a spelling mistake also shows a warning, for example `contextKit.treshold is not a setting`.
+Pi also warns about a setting name with a spelling mistake, a file that is not valid JSON, and settings that have no effect, for example `advanced.background` without a handoff note in the method order.
 
-### `enabled`
+### Upgrade from 0.3
 
-Turns all maintenance on or off.
+You do not need to do anything. Version 0.4 reads its own file. At the first start, it copies the `contextKit` block of Pi's `settings.json` to `~/.pi/agent/context-kit.json` (and the block of a trusted project to `.pi/context-kit.json`), with the same behavior, and shows a notice once. The project file gets only the settings that the project block changed, because 0.3 used the global block for the others. It does not change Pi's `settings.json`; you can delete the `contextKit` block, which is no longer used. If `context-kit.json` already exists, nothing is copied. If you had no `contextKit` block, 0.4 starts maintenance at the new default of `"75%"`; to wait for Pi's limit as before, set `"threshold": "pi"`. The table shows how the values are converted.
 
-- `true` (default): pi-context-kit works as described in this document.
-- `false`: pi-context-kit does nothing. Pi uses only its own summary. The `recall` tool stays available.
-
-```json
-{ "contextKit": { "enabled": false } }
-```
-
-### `thresholdTokens`
-
-Maintenance starts when the context is larger than this number of tokens.
-
-- `-1` (default): use `thresholdPercent`. If `thresholdPercent` is also `-1`, use Pi's limit.
-- A whole number above 0: start at this number of tokens.
-
-This setting has priority over `thresholdPercent`.
-pi-context-kit can start before Pi's limit, never after. If your value is larger than Pi's limit, Pi's limit is used. See [Pi settings that also apply](#pi-settings-that-also-apply).
-
-Example: start at 150,000 tokens.
-
-```json
-{ "contextKit": { "thresholdTokens": 150000 } }
-```
-
-| Model context window | Pi's limit (default reserve) | Threshold used |
-| --- | --- | --- |
-| 1,000,000 | 983,616 | 150,000 |
-| 200,000 | 183,616 | 150,000 |
-| 128,000 | 111,616 | 111,616 (Pi's limit is smaller) |
-
-### `thresholdPercent`
-
-Maintenance starts when the context is larger than this percentage of the model's context window.
-
-- `-1` (default): no percentage. If `thresholdTokens` is also `-1`, use Pi's limit.
-- A number above 0, up to 100: start at this percentage. Decimals are allowed, for example `72.5`. Values above 99 are used as 99.
-
-pi-context-kit ignores this setting when `thresholdTokens` is not `-1`.
-
-Example: start at 75% of the context window.
-
-```json
-{ "contextKit": { "thresholdPercent": 75 } }
-```
-
-| Model context window | Threshold used |
+| 0.3 (`contextKit` in `settings.json`) | 0.4 (`context-kit.json`) |
 | --- | --- |
-| 1,000,000 | 750,000 |
-| 200,000 | 150,000 |
-| 128,000 | 96,000 |
-
-Use `thresholdPercent` if you use models with different context windows and you want the same proportion for all of them. Use `thresholdTokens` if you want the same number for all of them.
-
-### `methodOrder`
-
-The methods that pi-context-kit tries when pruning is not sufficient, in this order.
-
-Allowed values in the list:
-
-| Value | What it does | Calls the model? |
-| --- | --- | --- |
-| `"handoff"` | Replaces the old conversation with a handoff note. The newest messages stay. | Yes, the session model |
-| `"shake"` | Replaces large old code blocks, XML blocks, and images with a short notice. | No |
-| `"soft"` | Replaces the old conversation with Pi's summary. The newest messages stay. Stops the list. | Yes, the session model |
-| `"remote"`, `"snapcompact"` | Accepted for oh-my-pi compatibility, but skipped. Pi does not have these methods. | No |
-
-Rules:
-
-- The order is important. pi-context-kit tries the first method, then the next one.
-- `"soft"` ends the list. Methods after `"soft"` never run.
-- If `"handoff"` is not in the list before `"soft"`, pi-context-kit writes no handoff note at all. This also applies to `/compact` and to background notes. Pi writes its own summary.
-- If `"shake"` is not in the list before `"soft"`, nothing is shaken.
-- A value that appears two times is used one time.
-- An empty list `[]` is allowed. Then pi-context-kit only replaces old file reads and prunes old tool outputs.
-
-Common choices:
-
-| `methodOrder` | What happens above the threshold |
-| --- | --- |
-| `["handoff", "shake", "soft"]` (default) | Prune. Then a handoff note. If the note fails, shake. Then Pi's summary. |
-| `["shake", "handoff", "soft"]` | Prune and shake together. If that is not sufficient, a handoff note. Then Pi's summary. |
-| `["handoff", "soft"]` | Prune. Then a handoff note. Never shake. |
-| `["shake", "soft"]` | Prune and shake. Then Pi's summary. No handoff note. |
-| `["soft"]` | Prune. Then Pi's summary. |
-| `[]` | Prune only. Pi writes its summary when the context reaches Pi's limit. |
-
-Example: try shaking first, because it does not call the model.
-
-```json
-{ "contextKit": { "methodOrder": ["shake", "handoff", "soft"] } }
-```
-
-### `asyncEnabled`
-
-Prepares the handoff note in the background, before the threshold.
-
-- `true` (default): the note starts one eighth of the threshold early, with a maximum of 32,000 tokens. If the note is ready at the threshold, compaction is fast.
-- `false`: no background note. At the threshold, pi-context-kit writes a new note. Your work waits for this note.
-
-This setting has an effect only if `"handoff"` is in `methodOrder` before `"soft"`.
-
-Example: no background requests.
-
-```json
-{ "contextKit": { "asyncEnabled": false } }
-```
-
-### `supersedeReads`
-
-Replaces the old copy of a file when the model reads the same file again.
-
-- `true` (default): the old copy becomes `[Superseded by a newer read of this file]`.
-- `false`: all copies stay.
-
-This works only above the threshold, together with pruning and shaking.
-
-```json
-{ "contextKit": { "supersedeReads": false } }
-```
-
-### `progressRatio`
-
-How small the context must become after a method, as a fraction of the threshold.
-If a method cannot make the context this small, pi-context-kit does not use its result and tries the next method.
-
-- `0.8` (default): the context must become 80% of the threshold or less. With a threshold of 150,000 tokens, this is 120,000 tokens.
-- A smaller value, for example `0.6`, gives more free space after maintenance. But each method must remove more, so it fails more often.
-- A larger value, for example `0.95`, makes each method succeed more easily. But maintenance can start again soon after.
-
-The value must be above 0 and not more than 1.
-
-```json
-{ "contextKit": { "progressRatio": 0.7 } }
-```
-
-### `prune.enabled`
-
-Turns pruning on or off. Pruning replaces old tool outputs with a notice, for example `[Output pruned: about 5000 tokens. Call recall with entryId "abc123" to read it.]`.
-
-- `true` (default).
-- `false`: tool outputs are never pruned.
-
-```json
-{ "contextKit": { "prune": { "enabled": false } } }
-```
-
-### `prune.protectTokens`
-
-The newest tool outputs, up to this number of tokens, are never pruned. Thus the model keeps its most recent results.
-
-- `40000` (default).
-- A larger value keeps more recent outputs, but removes less.
-
-```json
-{ "contextKit": { "prune": { "protectTokens": 60000 } } }
-```
-
-### `prune.minSavings`
-
-Pruning occurs only if it removes at least this number of tokens. This prevents small changes with little gain.
-
-- `20000` (default).
-
-```json
-{ "contextKit": { "prune": { "minSavings": 10000 } } }
-```
-
-### `prune.minTokens`
-
-Tool outputs smaller than this number of tokens are never pruned. A notice would not be much smaller than these outputs.
-
-- `50` (default).
-
-```json
-{ "contextKit": { "prune": { "minTokens": 200 } } }
-```
-
-### `shake.protectTokens`
-
-The newest part of the context, up to this number of tokens, is never shaken. Your own messages are never shaken, also when they are old.
-
-- `16000` (default).
-
-```json
-{ "contextKit": { "shake": { "protectTokens": 32000 } } }
-```
-
-### `shake.minSavings`
-
-Shaking occurs only if it removes at least this number of tokens.
-
-- `4000` (default).
-
-```json
-{ "contextKit": { "shake": { "minSavings": 8000 } } }
-```
-
-### `shake.blockMinTokens`
-
-Code blocks and XML blocks smaller than this number of tokens are never shaken.
-
-- `400` (default).
-
-```json
-{ "contextKit": { "shake": { "blockMinTokens": 1000 } } }
-```
-
-There is no `shake.enabled` setting. To stop shaking, remove `"shake"` from `methodOrder`.
+| `thresholdTokens: 150000` | `threshold: 150000` |
+| `thresholdPercent: 75` | `threshold: "75%"` |
+| Both `thresholdTokens` and `thresholdPercent` | `threshold` with the number of tokens |
+| No threshold (Pi's limit) | `threshold: "pi"`. The default for new users is `"75%"`. |
+| `methodOrder: ["shake", "handoff", "soft"]` | `strategy: "frugal"`, with `advanced.background: true` unless `asyncEnabled` was `false` |
+| `methodOrder: ["soft"]` | `strategy: "pi-summary"` |
+| Other `methodOrder` values | `advanced.methodOrder`, without `"remote"` and `"snapcompact"`, which 0.3 already skipped. A list with an unknown method becomes the default order, as in 0.3. |
+| `asyncEnabled` | `advanced.background`, when it differs from the strategy |
+| `supersedeReads`, `progressRatio`, `prune`, `shake` | The same names in `advanced` |
 
 ### Pi settings that also apply
 
-These settings belong to Pi, not to pi-context-kit. Put them in the `compaction` block, next to the `contextKit` block.
+These settings belong to Pi, not to pi-context-kit. Put them in the `compaction` block of Pi's `settings.json`.
 
 | Pi setting | Default | Effect on pi-context-kit |
 | --- | --- | --- |
@@ -495,61 +305,29 @@ These settings belong to Pi, not to pi-context-kit. Put them in the `compaction`
 | `compaction.keepRecentTokens` | `20000` | After a handoff note, approximately this number of the newest tokens stays unchanged. |
 | `compaction.modelOverrides` | none | Changes `reserveTokens` and `keepRecentTokens` for one model. |
 
-pi-context-kit has no setting per model. To start earlier for one model only, make Pi's limit smaller for this model with `compaction.modelOverrides`. pi-context-kit always starts at Pi's limit or before, so it also starts earlier for this model.
-
-Example: all models start at 150,000 tokens. One model with a 200,000-token window starts at 200,000 − 80,000 = 120,000 tokens. Replace `provider/model-id` with the ID of your model.
-
-```json
-{
-  "compaction": {
-    "modelOverrides": {
-      "provider/model-id": { "reserveTokens": 80000 }
-    }
-  },
-  "contextKit": {
-    "thresholdTokens": 150000
-  }
-}
-```
-
-Pi also uses `reserveTokens` to limit the length of its own summary. See the Pi documentation about compaction.
-
-The model key must be the exact `provider/modelId`. To see the IDs, type `pi --list-models`.
+pi-context-kit has no setting per model. To start earlier for one model only, make Pi's limit smaller for this model with `compaction.modelOverrides`, for example `{ "compaction": { "modelOverrides": { "provider/model-id": { "reserveTokens": 80000 } } } }`. With a 200,000-token window, this model then starts at 120,000 tokens at the latest. The model key must be the exact `provider/modelId`. To see the IDs, type `pi --list-models`.
 
 ## Recipes
 
-| I want to... | Settings |
+| I want to... | `context-kit.json` |
 | --- | --- |
-| Start earlier with large models | `{ "contextKit": { "thresholdTokens": 150000 } }` |
-| Use the same proportion for all models | `{ "contextKit": { "thresholdPercent": 75 } }` |
-| Never write a handoff note | `{ "contextKit": { "methodOrder": ["shake", "soft"] } }` |
-| Try the free method first, then a handoff note | `{ "contextKit": { "methodOrder": ["shake", "handoff", "soft"] } }` |
-| Keep more recent tool outputs | `{ "contextKit": { "prune": { "protectTokens": 80000 } } }` |
-| Keep all old file copies | `{ "contextKit": { "supersedeReads": false } }` |
-| Use other settings in one project | Put the `contextKit` block in `.pi/settings.json` in that project. |
-| Turn pi-context-kit off, but keep `recall` | `{ "contextKit": { "enabled": false } }` |
-
-To combine recipes, put all the settings in one `contextKit` block:
-
-```json
-{
-  "contextKit": {
-    "thresholdTokens": 150000,
-    "methodOrder": ["shake", "handoff", "soft"],
-    "prune": { "protectTokens": 80000 }
-  }
-}
-```
+| Start later, at Pi's own limit | `{ "threshold": "pi" }` |
+| Start at the same number of tokens on all models | `{ "threshold": 150000 }` |
+| Avoid model requests when possible | `{ "strategy": "frugal" }` |
+| Never write a handoff note | `{ "advanced": { "methodOrder": ["shake", "soft"] } }` |
+| Keep more recent tool outputs | `{ "advanced": { "prune": { "protectTokens": 80000 } } }` |
+| Keep all old file copies | `{ "advanced": { "supersedeReads": false } }` |
+| Turn pi-context-kit off, but keep `recall` | `{ "enabled": false }`, or `/context-kit` |
 
 ## Limits
 
 - **Pi still has its own limit.** Pi compacts when the context reaches the context window minus `compaction.reserveTokens` (default 16,384). pi-context-kit can only start earlier, not later. You set Pi's limit with `compaction.reserveTokens` and `compaction.modelOverrides`.
 - **A threshold is not a guarantee.** At the threshold, pi-context-kit tries to make the context smaller. If one tool output is very large, or the summary request fails, the methods can fail. Then Pi compacts at its own limit.
 - **Token counts are estimates.** pi-context-kit uses Pi's estimates. The real count of the provider can be different.
-- **If Pi's compaction is off** (`compaction.enabled: false`), pi-context-kit changes the context only when you run `/compact`. Then it writes a handoff note, as with compaction on. `thresholdTokens` and `thresholdPercent` are ignored, because pi-context-kit edits the context automatically only at a threshold.
+- **If Pi's compaction is off** (`compaction.enabled: false`), pi-context-kit changes the context only when you run `/compact`. Then it writes a handoff note, as with compaction on. `threshold` is ignored, because pi-context-kit edits the context automatically only at a threshold.
 - **Manual compaction and errors.** When you type `/compact`, when the context is too large for the model, or when Pi compacts before a turn, `shake` cannot run. pi-context-kit uses a ready handoff note, or Pi's summary.
-- **`methodOrder` stops at `soft`.** The methods after `soft` do not run.
-- **Subagents** use their own settings. They show no warnings, because they have no screen.
+- **The method order stops at `soft`.** The methods after `soft` do not run.
+- **Subagents** read the same settings files. They show no warnings and no status, because they have no screen.
 
 ## FAQ
 

@@ -1,4 +1,11 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -15,12 +22,13 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const sessions: { dispose(): void }[] = [];
 
 afterEach(() => {
   for (const session of sessions.splice(0)) session.dispose();
+  vi.unstubAllEnvs();
 });
 
 async function start(
@@ -29,11 +37,25 @@ async function start(
   compactionEnabled = true,
   contextKit?: unknown,
   keepRecentTokens = 1_000,
+  legacyContextKit?: unknown,
 ) {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-context-kit-agent-"));
   const cwd = mkdtempSync(join(tmpdir(), "pi-context-kit-cwd-"));
   writeFileSync(join(cwd, "a.ts"), "export const a = 1;\n".repeat(200));
   writeFileSync(join(cwd, "b.ts"), "export const b = 2;\n".repeat(1_000));
+  // The extension finds its settings file through Pi's agent directory.
+  vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  if (contextKit !== undefined)
+    writeFileSync(
+      join(agentDir, "context-kit.json"),
+      JSON.stringify(contextKit),
+    );
+  // 0.3 read its settings from Pi's settings file.
+  if (legacyContextKit !== undefined)
+    writeFileSync(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ contextKit: legacyContextKit }),
+    );
   const faux = fauxProvider({
     models: [
       { id: "faux-1", contextWindow, maxTokens: 4_096, reasoning: true },
@@ -47,7 +69,6 @@ async function start(
       reserveTokens: 1_000,
       keepRecentTokens,
     },
-    contextKit,
   };
   const settingsManager = SettingsManager.inMemory(settings);
   const modelRuntime = await ModelRuntime.create({
@@ -90,7 +111,7 @@ async function start(
     tools: ["read", "edit", "recall"],
   });
   sessions.push(session);
-  return { session, faux, cwd };
+  return { session, faux, cwd, agentDir };
 }
 
 describe("pi-context-kit inside Pi", () => {
@@ -118,6 +139,323 @@ describe("pi-context-kit inside Pi", () => {
     },
   );
 
+  it("tells the user about freed tokens and shows the threshold in the status", async () => {
+    const { session } = await start(
+      [
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+        fauxAssistantMessage("done"),
+      ],
+      200_000,
+      true,
+      { threshold: 8_000, advanced: { methodOrder: [] } },
+    );
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    await session.bindExtensions({
+      uiContext: {
+        ...session.extensionRunner.getUIContext(),
+        notify,
+        setStatus,
+      },
+    });
+    await session.prompt("Read b.ts twice");
+    expect(notify.mock.calls).toEqual([
+      [
+        expect.stringMatching(
+          /^pi-context-kit freed \d+% of the context \(\d+k? tokens\)\. The agent can still look up what was removed\.$/,
+        ),
+        "info",
+      ],
+    ]);
+    expect(setStatus).toHaveBeenLastCalledWith(
+      "context-kit",
+      expect.stringMatching(/^Context [0-3]% · cleanup at 4%$/),
+    );
+  });
+
+  it("states the settings with /context-kit outside the TUI", async () => {
+    const { session } = await start([], 200_000, true, { strategy: "frugal" });
+    const notify = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    await session.prompt("/context-kit");
+    expect(notify.mock.calls).toEqual([
+      [
+        expect.stringMatching(
+          /^pi-context-kit: automatic cleanup at 75% full, with trim first\. Settings: .+context-kit\.json$/,
+        ),
+        "info",
+      ],
+    ]);
+  });
+
+  it("moves the 0.3 settings of a trusted project to the project file", async () => {
+    const { session, cwd, agentDir } = await start([
+      fauxAssistantMessage("done"),
+    ]);
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ contextKit: { methodOrder: ["soft"] } }),
+    );
+    const notify = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    const file = join(cwd, ".pi", "context-kit.json");
+    expect(notify.mock.calls).toEqual([
+      [expect.stringContaining(`moved its settings to ${file}.`), "info"],
+    ]);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      strategy: "pi-summary",
+    });
+    expect(existsSync(join(agentDir, "context-kit.json"))).toBe(false);
+  });
+
+  it("ignores the settings of a project that Pi does not trust", async () => {
+    const { session, cwd } = await start([fauxAssistantMessage("done")]);
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ contextKit: { methodOrder: ["soft"] } }),
+    );
+    session.settingsManager.setProjectTrusted(false);
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    await session.bindExtensions({
+      uiContext: {
+        ...session.extensionRunner.getUIContext(),
+        notify,
+        setStatus,
+      },
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(existsSync(join(cwd, ".pi", "context-kit.json"))).toBe(false);
+    writeFileSync(
+      join(cwd, ".pi", "context-kit.json"),
+      JSON.stringify({ enabled: false }),
+    );
+    await session.prompt("Hi");
+    expect(setStatus).toHaveBeenLastCalledWith(
+      "context-kit",
+      expect.stringMatching(/ · cleanup at 75%$/),
+    );
+  });
+
+  it("warns when it cannot move the 0.3 settings and moves them at the next start", async () => {
+    const { session, agentDir, cwd } = await start(
+      [],
+      200_000,
+      true,
+      undefined,
+      1_000,
+      { thresholdTokens: 8_000 },
+    );
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ contextKit: { methodOrder: ["soft"] } }),
+    );
+    const projectFile = join(cwd, ".pi", "context-kit.json");
+    const notify = vi.fn();
+    const file = join(agentDir, "context-kit.json");
+    // A read-only file where the new file is written first makes the write fail once.
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, "");
+    chmodSync(temporary, 0o444);
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    expect(notify.mock.calls).toEqual([
+      [
+        expect.stringMatching(
+          new RegExp(
+            `saving ${file} failed .+Defaults apply until it works\\.`,
+          ),
+        ),
+        "warning",
+      ],
+    ]);
+    expect(existsSync(projectFile)).toBe(false);
+    notify.mockClear();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    expect(notify.mock.calls).toEqual([
+      [expect.stringContaining(`moved its settings to ${file}.`), "info"],
+      [
+        expect.stringContaining(`moved its settings to ${projectFile}.`),
+        "info",
+      ],
+    ]);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      threshold: 8_000,
+    });
+  });
+
+  it("waits to move the 0.3 settings while Pi's settings cannot be read", async () => {
+    const { session, agentDir, cwd } = await start([]);
+    writeFileSync(join(agentDir, "settings.json"), "{ broken");
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ contextKit: { methodOrder: ["soft"] } }),
+    );
+    const projectFile = join(cwd, ".pi", "context-kit.json");
+    const notify = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(existsSync(projectFile)).toBe(false);
+    writeFileSync(join(agentDir, "settings.json"), "{}");
+    notify.mockClear();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    expect(notify.mock.calls).toEqual([
+      [
+        expect.stringContaining(`moved its settings to ${projectFile}.`),
+        "info",
+      ],
+    ]);
+  });
+
+  it("keeps the global 0.3 threshold for a project that did not set one", async () => {
+    const { session, cwd } = await start(
+      [fauxAssistantMessage("done")],
+      200_000,
+      true,
+      undefined,
+      1_000,
+      { thresholdPercent: 70 },
+    );
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(
+      join(cwd, ".pi", "settings.json"),
+      JSON.stringify({ contextKit: { prune: { enabled: false } } }),
+    );
+    const statuses: string[] = [];
+    const setStatus = (key: string, text: string | undefined) => {
+      if (key === "context-kit") statuses.push(text ?? "");
+    };
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), setStatus },
+    });
+    expect(
+      JSON.parse(readFileSync(join(cwd, ".pi", "context-kit.json"), "utf8")),
+    ).toEqual({ advanced: { prune: { enabled: false } } });
+    expect(statuses.at(-1)).toMatch(/ · cleanup at 70%$/);
+  });
+
+  it("updates the status after a compaction at turn end", async () => {
+    // The last reply passes the threshold, so no later turn refreshes the status.
+    const main = [
+      fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
+      fauxAssistantMessage("done ".repeat(5_000)),
+    ];
+    const reply: FauxResponseStep = (context) =>
+      JSON.stringify(context.messages.at(-1)).includes("handoff note")
+        ? fauxAssistantMessage("## Goal\nNote")
+        : (main.shift() ?? fauxAssistantMessage("extra"));
+    const { session } = await start(Array(8).fill(reply), 200_000, true, {
+      threshold: 10_000,
+      advanced: {
+        background: false,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
+    });
+    const compacted = () =>
+      session.sessionManager
+        .getBranch()
+        .some((entry) => entry.type === "compaction");
+    const statuses: [string, boolean][] = [];
+    const setStatus = (key: string, text: string | undefined) => {
+      if (key === "context-kit") statuses.push([text ?? "", compacted()]);
+    };
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), setStatus },
+    });
+    await session.prompt("Read b.ts and answer");
+    expect(
+      session.sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "compaction"),
+    ).toHaveLength(1);
+    expect(main).toHaveLength(0);
+    expect(statuses.at(-1)).toEqual([
+      expect.stringMatching(/^Context \d% · cleanup at 5%$/),
+      true,
+    ]);
+  });
+
+  it("reports an invalid settings file at start and again on /context-kit", async () => {
+    const { session, cwd } = await start([], 200_000, true, {});
+    const file = join(cwd, ".pi", "context-kit.json");
+    mkdirSync(join(cwd, ".pi"));
+    writeFileSync(file, "{ broken");
+    const notify = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    await session.prompt("/context-kit");
+    const warning = [
+      expect.stringMatching(
+        /^pi-context-kit settings need attention: .+context-kit\.json is not valid JSON .+, file ignored\. Type \/context-kit to see them\.$/,
+      ),
+      "warning",
+    ];
+    expect(notify.mock.calls).toEqual([
+      warning,
+      warning,
+      [expect.stringMatching(/^pi-context-kit: automatic cleanup/), "info"],
+    ]);
+  });
+
+  it("moves 0.3 settings to context-kit.json once and keeps their behavior", async () => {
+    const { session, agentDir } = await start(
+      [fauxAssistantMessage("done"), fauxAssistantMessage("done")],
+      200_000,
+      true,
+      undefined,
+      1_000,
+      { thresholdTokens: 8_000, asyncEnabled: false },
+    );
+    const notify = vi.fn();
+    const setStatus = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), notify },
+    });
+    await session.prompt("Hi");
+    await session.bindExtensions({
+      uiContext: {
+        ...session.extensionRunner.getUIContext(),
+        notify,
+        setStatus,
+      },
+    });
+    await session.prompt("Again");
+    // 8,000 of 200,000 tokens.
+    expect(setStatus).toHaveBeenLastCalledWith(
+      "context-kit",
+      expect.stringMatching(/ · cleanup at 4%$/),
+    );
+    const file = join(agentDir, "context-kit.json");
+    expect(notify.mock.calls).toEqual([
+      [
+        `pi-context-kit moved its settings to ${file}. The "contextKit" entry in Pi's settings.json is no longer used.`,
+        "info",
+      ],
+    ]);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
+      threshold: 8_000,
+      advanced: { background: false },
+    });
+  });
+
   it("replaces an older read when that brings the context below the threshold", async () => {
     const { session } = await start(
       [
@@ -127,7 +465,7 @@ describe("pi-context-kit inside Pi", () => {
       ],
       200_000,
       true,
-      { thresholdTokens: 8_000, methodOrder: [] },
+      { threshold: 8_000, advanced: { methodOrder: [] } },
     );
     await session.prompt("Read b.ts twice");
     const edits = session.sessionManager
@@ -143,8 +481,8 @@ describe("pi-context-kit inside Pi", () => {
     [4, 1],
     [10, 0],
   ])(
-    "takes thresholdPercent %i as a share of the context window",
-    async (thresholdPercent, edits) => {
+    "takes threshold %i%% as a share of the context window",
+    async (percent, edits) => {
       const { session } = await start(
         [
           fauxAssistantMessage(fauxToolCall("read", { path: "b.ts" })),
@@ -153,7 +491,7 @@ describe("pi-context-kit inside Pi", () => {
         ],
         200_000,
         true,
-        { thresholdPercent, methodOrder: [] },
+        { threshold: `${percent}%`, advanced: { methodOrder: [] } },
       );
       await session.prompt("Read b.ts twice");
       expect(
@@ -174,7 +512,7 @@ describe("pi-context-kit inside Pi", () => {
       ],
       200_000,
       true,
-      { thresholdTokens: 1_000, methodOrder: [] },
+      { threshold: 1_000, advanced: { methodOrder: [] } },
     );
     await session.prompt("Read a.ts twice");
     expect(
@@ -264,10 +602,13 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 19_000, true, {
-      asyncEnabled: true,
-      supersedeReads: false,
-      prune: { enabled: false },
-      progressRatio: 1,
+      threshold: "pi",
+      advanced: {
+        background: true,
+        supersedeReads: false,
+        prune: { enabled: false },
+        progressRatio: 1,
+      },
     });
     await session.prompt("Read the file");
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -318,9 +659,12 @@ describe("pi-context-kit inside Pi", () => {
         return next;
       };
       const { session } = await start(Array(8).fill(reply), 19_000, true, {
-        supersedeReads: false,
-        prune: { enabled: false },
-        progressRatio: 1,
+        threshold: "pi",
+        advanced: {
+          supersedeReads: false,
+          prune: { enabled: false },
+          progressRatio: 1,
+        },
       });
       await session.prompt("Read b.ts three times");
       expect(noteSignal?.aborted).toBe(false);
@@ -378,9 +722,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session, cwd } = await start(Array(12).fill(reply), 17_500, true, {
-      supersedeReads: false,
-      prune: { enabled: false },
-      shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      threshold: "pi",
+      advanced: {
+        supersedeReads: false,
+        prune: { enabled: false },
+        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      },
     });
     writeFileSync(join(cwd, "b.ts"), `<log>${"b".repeat(19_000)}</log>`);
     await session.prompt("Read b.ts four times");
@@ -413,7 +760,9 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     // An 8,000-token threshold has a 1,000-token lead, not an 8,192-token floor.
-    const { session } = await start(Array(6).fill(reply), 9_000);
+    const { session } = await start(Array(6).fill(reply), 9_000, true, {
+      threshold: "pi",
+    });
     await session.prompt("Read a.ts");
     await session.prompt("Continue");
     const live =
@@ -439,7 +788,15 @@ describe("pi-context-kit inside Pi", () => {
       true,
       { enabled: false },
     );
+    const setStatus = vi.fn();
+    await session.bindExtensions({
+      uiContext: { ...session.extensionRunner.getUIContext(), setStatus },
+    });
     await session.prompt("Read a.ts twice");
+    expect(setStatus).toHaveBeenLastCalledWith(
+      "context-kit",
+      "Context cleanup off",
+    );
     expect(
       session.sessionManager
         .getBranch()
@@ -461,7 +818,7 @@ describe("pi-context-kit inside Pi", () => {
       ],
       200_000,
       true,
-      { methodOrder: ["soft", "handoff"] },
+      { advanced: { methodOrder: ["soft", "handoff"] } },
     );
     await session.prompt("Hi");
     await session.prompt("Again");
@@ -486,10 +843,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      thresholdTokens: 13_000,
-      asyncEnabled: false,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        background: false,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     const compactions = session.sessionManager
@@ -522,10 +881,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      thresholdTokens: 13_000,
-      asyncEnabled: false,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        background: false,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     const compactions = session.sessionManager
@@ -556,9 +917,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 15_000, true, {
-      asyncEnabled: false,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: "pi",
+      advanced: {
+        background: false,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt(`Read b.ts. ${"history ".repeat(4_500)}`);
     const compactions = session.sessionManager
@@ -589,10 +953,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      thresholdTokens: 13_000,
-      asyncEnabled: true,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        background: true,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt("Read b.ts three times");
     expect(notes).toBe(1);
@@ -637,9 +1003,8 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(12).fill(reply), 200_000, true, {
-      thresholdTokens: 12_000,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 12_000,
+      advanced: { supersedeReads: false, prune: { enabled: false } },
     });
     await session.prompt("Read b.ts twice, then a.ts");
     expect(noteSignal?.aborted).toBe(false);
@@ -683,9 +1048,8 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(12).fill(reply), 200_000, true, {
-      thresholdTokens: 12_000,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 12_000,
+      advanced: { supersedeReads: false, prune: { enabled: false } },
     });
     try {
       await session.prompt("Read b.ts twice, then a.ts");
@@ -726,11 +1090,13 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), contextWindow, true, {
-      thresholdTokens: 13_000,
-      methodOrder: order,
-      asyncEnabled: false,
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        methodOrder: order,
+        background: false,
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     expect(
@@ -753,7 +1119,7 @@ describe("pi-context-kit inside Pi", () => {
       Array(4).fill(reply),
       200_000,
       true,
-      { thresholdTokens: 13_000, methodOrder: ["soft"] },
+      { threshold: 13_000, advanced: { methodOrder: ["soft"] } },
       50_000,
     );
     await session.prompt("Hi");
@@ -787,10 +1153,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(6).fill(reply), 200_000, true, {
-      thresholdTokens: 13_000,
-      methodOrder: ["soft"],
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        methodOrder: ["soft"],
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt("Hi");
     const first = session.sessionManager
@@ -826,10 +1194,12 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      thresholdTokens: 13_000,
-      methodOrder: ["soft"],
-      supersedeReads: false,
-      prune: { enabled: false },
+      threshold: 13_000,
+      advanced: {
+        methodOrder: ["soft"],
+        supersedeReads: false,
+        prune: { enabled: false },
+      },
     });
     await session.prompt(`Read b.ts then a.ts. ${"history ".repeat(5_000)}`);
     expect(summaries).toBe(1);
@@ -847,7 +1217,7 @@ describe("pi-context-kit inside Pi", () => {
       ],
       40_000,
       true,
-      { asyncEnabled: false },
+      { advanced: { background: false } },
     );
     await session.prompt(`Remember ${"history ".repeat(1_500)}`);
     await session.prompt("Continue");
@@ -871,7 +1241,7 @@ describe("pi-context-kit inside Pi", () => {
       ],
       200_000,
       true,
-      { thresholdTokens: 4_000, asyncEnabled: false, progressRatio: 1 },
+      { threshold: 4_000, advanced: { background: false, progressRatio: 1 } },
     );
     await session.prompt("Read a.ts then b.ts");
 
@@ -904,9 +1274,8 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(5).fill(reply), 200_000, true, {
-      thresholdTokens: 4_000,
-      asyncEnabled: false,
-      progressRatio: 1,
+      threshold: 4_000,
+      advanced: { background: false, progressRatio: 1 },
     });
     await session.prompt("Read b.ts then a.ts");
 
@@ -945,10 +1314,12 @@ describe("pi-context-kit inside Pi", () => {
         contextWindow,
         true,
         {
-          thresholdTokens: 18_000,
-          asyncEnabled: false,
-          prune: { enabled: false },
-          shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+          threshold: 18_000,
+          advanced: {
+            background: false,
+            prune: { enabled: false },
+            shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+          },
         },
       );
       await session.prompt("Generate the source");
@@ -980,11 +1351,13 @@ describe("pi-context-kit inside Pi", () => {
       200_000,
       true,
       {
-        thresholdTokens: 8_000,
-        methodOrder: ["shake", "soft", "handoff"],
-        asyncEnabled: false,
-        prune: { enabled: false },
-        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        threshold: 8_000,
+        advanced: {
+          methodOrder: ["shake", "soft", "handoff"],
+          background: false,
+          prune: { enabled: false },
+          shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        },
       },
     );
     await session.prompt("Inspect the file");
@@ -1010,10 +1383,12 @@ describe("pi-context-kit inside Pi", () => {
       200_000,
       true,
       {
-        thresholdTokens: 8_000,
-        asyncEnabled: false,
-        prune: { protectTokens: 0, minSavings: 1, minTokens: 50 },
-        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        threshold: 8_000,
+        advanced: {
+          background: false,
+          prune: { protectTokens: 0, minSavings: 1, minTokens: 50 },
+          shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        },
       },
     );
     await session.prompt("Read b.ts");
@@ -1048,10 +1423,12 @@ describe("pi-context-kit inside Pi", () => {
       200_000,
       true,
       {
-        thresholdTokens: 11_000,
-        asyncEnabled: false,
-        prune: { enabled: false },
-        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        threshold: 11_000,
+        advanced: {
+          background: false,
+          prune: { enabled: false },
+          shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        },
       },
     );
     await session.prompt("Read b.ts twice");
@@ -1082,11 +1459,13 @@ describe("pi-context-kit inside Pi", () => {
       200_000,
       true,
       {
-        thresholdTokens: 8_000,
-        methodOrder: ["soft", "shake", "handoff"],
-        asyncEnabled: false,
-        prune: { enabled: false },
-        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        threshold: 8_000,
+        advanced: {
+          methodOrder: ["soft", "shake", "handoff"],
+          background: false,
+          prune: { enabled: false },
+          shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+        },
       },
     );
     await session.prompt("Inspect the file");
@@ -1127,11 +1506,13 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      thresholdTokens: 18_000,
-      methodOrder: [first, second, third],
-      asyncEnabled: false,
-      prune: { enabled: false },
-      shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      threshold: 18_000,
+      advanced: {
+        methodOrder: [first, second, third],
+        background: false,
+        prune: { enabled: false },
+        shake: { protectTokens: 0, minSavings: 1, blockMinTokens: 10 },
+      },
     });
     await session.prompt("Generate the source");
     await session.prompt("Read b.ts");
@@ -1185,10 +1566,12 @@ describe("pi-context-kit inside Pi", () => {
       200_000,
       true,
       {
-        thresholdTokens: 13_000,
-        asyncEnabled: false,
-        progressRatio: 1,
-        prune: { enabled: false },
+        threshold: 13_000,
+        advanced: {
+          background: false,
+          progressRatio: 1,
+          prune: { enabled: false },
+        },
       },
       8_000,
     );
@@ -1285,7 +1668,7 @@ describe("pi-context-kit inside Pi", () => {
       return next;
     };
     const { session } = await start(Array(8).fill(reply), 200_000, true, {
-      asyncEnabled: false,
+      advanced: { background: false },
     });
     await session.prompt("Read a.ts");
     const compactions = session.sessionManager

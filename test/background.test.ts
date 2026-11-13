@@ -37,6 +37,31 @@ describe("BackgroundHandoff", () => {
     expect(background.writing(null)).toBe(false);
   });
 
+  it.each([
+    ["ready", NOTE],
+    [undefined, undefined],
+  ])(
+    "reports the note as %s once it settles, and tells the listener",
+    async (state, note) => {
+      const settled = vi.fn();
+      const background = new BackgroundHandoff(settled);
+      let finish = (_: typeof NOTE | undefined) => {};
+      background.start(
+        null,
+        "leaf",
+        () => new Promise((resolve) => (finish = resolve)),
+        () => {},
+      );
+      expect(background.noteState(null)).toBe("writing");
+      expect(background.noteState("other")).toBeUndefined();
+      expect(settled).not.toHaveBeenCalled();
+      finish(note);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(background.noteState(null)).toBe(state);
+      expect(settled).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("ignores a job from another epoch or branch", async () => {
     const t = new Transcript();
     const background = new BackgroundHandoff();
