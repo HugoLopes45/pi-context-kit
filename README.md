@@ -1,5 +1,7 @@
 # pi-context-kit: long Pi sessions that stay sharp
 
+English | [简体中文](https://github.com/HugoLopes45/pi-context-kit/blob/main/README.zh-CN.md)
+
 [![CI](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/HugoLopes45/pi-context-kit/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/pi-context-kit)](https://www.npmjs.com/package/pi-context-kit)
 [![Pi package](https://img.shields.io/badge/pi.dev-package-blue)](https://pi.dev/packages/pi-context-kit)
